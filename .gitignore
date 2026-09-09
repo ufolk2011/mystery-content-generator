@@ -1,0 +1,6 @@
+.venv/
+venv/
+__pycache__/
+.env
+history_topics.json
+saved_stories.json
