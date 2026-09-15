@@ -18,8 +18,16 @@ def _env_path(name, default=""):
     return Path(value).expanduser() if value else None
 
 
-def _python_bin():
-    return os.environ.get("LIPSYNC_PYTHON") or os.environ.get("PYTHON") or shutil.which("python") or "python"
+def _python_bin(home=None):
+    override = (os.environ.get("LIPSYNC_PYTHON") or "").strip()
+    if override:
+        return override
+    if home:
+        for rel in (Path(".venv") / "Scripts" / "python.exe", Path(".venv") / "bin" / "python"):
+            candidate = Path(home) / rel
+            if candidate.is_file():
+                return str(candidate)
+    return shutil.which("python") or "python"
 
 
 def require_file(path, kind="ไฟล์"):
@@ -148,7 +156,7 @@ def sadtalker_command(audio_path, template_face, result_dir, extra_args=None):
     if script is None or not script.is_file():
         return None
     cmd = [
-        _python_bin(),
+        _python_bin(home if home and home.is_dir() else script.parent),
         str(script),
         "--driven_audio",
         str(audio_path),
@@ -174,7 +182,7 @@ def wav2lip_command(audio_path, template_face, output_video, extra_args=None):
     if not script.is_file():
         return None
     cmd = [
-        _python_bin(),
+        _python_bin(home if home and home.is_dir() else script.parent),
         str(script),
         "--checkpoint_path",
         str(checkpoint),
@@ -200,7 +208,7 @@ def live_portrait_command(source_image, driving_video, output_dir, extra_args=No
     if script is None or not script.is_file():
         return None
     cmd = [
-        _python_bin(),
+        _python_bin(home if home and home.is_dir() else script.parent),
         str(script),
         "-s",
         str(source_image),
