@@ -329,32 +329,46 @@ def _save_upload(upload, folder, prefix):
 def render_lip_sync_page():
     import streamlit as st
 
-    st.markdown('<div class="hero-kicker">Mystery Content Studio</div>', unsafe_allow_html=True)
-    st.markdown('<div class="hero-title">ลิปซิงค์คาแรกเตอร์</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="hero-sub">แปลงเสียงพากย์เป็น Driving Video แล้วให้ LivePortrait สวมหน้าคาแรกเตอร์จริง</div>',
-        unsafe_allow_html=True,
-    )
+    st.subheader("🗣️ Mascot Lip-Sync Generator")
+    st.write("อัปโหลดรูปมาสคอตและไฟล์เสียงพากย์ เพื่อสร้างปากขยับ")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        source_image = st.file_uploader(
+            "1. อัปโหลดรูปหน้ามาสคอต (.jpg / .png)",
+            type=["jpg", "jpeg", "png"],
+            key="lipsync_source_image",
+        )
+        if source_image is not None:
+            try:
+                st.image(source_image, caption="รูปมาสคอต", use_container_width=True)
+            except Exception:
+                st.caption(f"อัปโหลดแล้ว: {source_image.name}")
+            try:
+                source_image.seek(0)
+            except Exception:
+                pass
+    with col2:
+        driving_audio = st.file_uploader(
+            "2. อัปโหลดไฟล์เสียงพากย์ (.mp3 / .wav)",
+            type=["mp3", "wav", "m4a"],
+            key="lipsync_audio",
+        )
+        if driving_audio is not None:
+            st.success("อัปโหลดเสียงสำเร็จ")
+            try:
+                st.audio(driving_audio)
+                driving_audio.seek(0)
+            except Exception:
+                st.caption(f"ไฟล์เสียง: {driving_audio.name}")
 
     tools = describe_setup()
-    missing = []
-    if not tools["liveportrait"]:
-        missing.append("LivePortrait (`LIVEPORTRAIT_HOME`)")
-    if not tools["sadtalker"] and not tools["wav2lip"]:
-        missing.append("SadTalker หรือ Wav2Lip สำหรับสร้างคลิปปากจากเสียง")
-    if not tools["ffmpeg"]:
-        missing.append("ffmpeg (ใช้ผสมเสียงลงคลิปสุดท้าย)")
-
-    if missing:
-        st.warning("ยังติดตั้งไม่ครบ: " + " · ".join(missing))
-        st.caption(
-            "ตั้งค่าโฟลเดอร์โมเดลในช่องด้านล่าง หรือใส่ environment variables "
-            "`LIVEPORTRAIT_HOME`, `SADTALKER_HOME`, `WAV2LIP_HOME`, `LIPSYNC_TEMPLATE_FACE`"
-        )
-    else:
-        st.success("พบเครื่องมือครบ พร้อมรันไพพ์ไลน์")
-
-    with st.expander("ตำแหน่งโมเดลบนเครื่อง", expanded=not tools["liveportrait"]):
+    with st.expander("ตั้งค่าโมเดลหลังบ้าน"):
+        if not tools["liveportrait"] or (not tools["sadtalker"] and not tools["wav2lip"]):
+            st.caption(
+                "ตั้ง `LIVEPORTRAIT_HOME` และ `SADTALKER_HOME` หรือ `WAV2LIP_HOME` "
+                "ถ้ายังไม่ติดตั้ง ระบบจะแสดงคำสั่งที่จะรัน (dry run)"
+            )
         live_home = st.text_input(
             "LIVEPORTRAIT_HOME",
             value=os.environ.get("LIVEPORTRAIT_HOME", ""),
@@ -376,69 +390,41 @@ def render_lip_sync_page():
             os.environ["SADTALKER_HOME"] = talker_home.strip()
         if wav_home:
             os.environ["WAV2LIP_HOME"] = wav_home.strip()
-
-    col_img, col_audio = st.columns(2)
-    with col_img:
-        source_image = st.file_uploader(
-            "รูปคาแรกเตอร์จริง (เช่น ผู้ชายถือเทียน)",
-            type=["jpg", "jpeg", "png", "webp"],
-            key="lipsync_source_image",
+        dry_run = st.checkbox(
+            "ทดลองดูคำสั่งก่อนรันจริง (dry run)",
+            value=not describe_setup()["liveportrait"],
         )
+        output_dir = st.text_input("โฟลเดอร์ผลลัพธ์", value="output")
         template_face = st.file_uploader(
-            "รูปหน้าเทมเพลตสำหรับ SadTalker / Wav2Lip (ไม่บังคับถ้ามี Driving Video)",
-            type=["jpg", "jpeg", "png", "webp"],
+            "รูปหน้าเทมเพลต SadTalker (ไม่บังคับ — ถ้าไม่ใส่จะใช้รูปมาสคอต)",
+            type=["jpg", "jpeg", "png"],
             key="lipsync_template_face",
         )
-    with col_audio:
-        driving_audio = st.file_uploader(
-            "ไฟล์เสียงพากย์ (.mp3 / .wav / .m4a)",
-            type=["mp3", "wav", "m4a"],
-            key="lipsync_audio",
-        )
         driving_video = st.file_uploader(
-            "Driving Video พร้อมใช้ (ข้ามขั้น Audio-to-Video)",
+            "Driving Video พร้อมใช้ (ไม่บังคับ — ข้ามขั้นสร้างปากจากเสียง)",
             type=["mp4", "mov", "webm"],
             key="lipsync_driving_video",
         )
 
-    if source_image:
-        try:
-            st.image(source_image, caption=source_image.name, width=280)
-        except Exception:
-            st.caption(f"อัปโหลดแล้ว: {source_image.name}")
-        try:
-            source_image.seek(0)
-        except Exception:
-            pass
-    if driving_audio:
-        try:
-            st.audio(driving_audio)
-            driving_audio.seek(0)
-        except Exception:
-            st.caption(f"ไฟล์เสียง: {driving_audio.name}")
-
-    output_dir = st.text_input("โฟลเดอร์ผลลัพธ์", value="output")
-    dry_run = st.checkbox("ทดลองดูคำสั่งก่อนรันจริง (dry run)", value=not tools["liveportrait"])
-
-    if st.button("🎬 สร้างคลิปลิปซิงค์", type="primary", use_container_width=True):
-        if source_image is None:
-            st.error("อัปโหลดรูปคาแรกเตอร์ก่อน")
+    if st.button("🚀 เริ่มเรนเดอร์มาสคอตขยับปาก", type="primary", use_container_width=True):
+        if source_image is None or driving_audio is None:
+            st.warning("⚠️ กรุณาอัปโหลดรูปและเสียงให้ครบก่อน")
             return
-        if driving_audio is None and driving_video is None:
-            st.error("อัปโหลดไฟล์เสียงพากย์ หรือ Driving Video")
-            return
+        st.info("กำลังประมวลผลหลังบ้าน...")
         work = Path(output_dir) / "uploads"
         try:
             source_path = _save_upload(source_image, work, "source")
-            audio_path = _save_upload(driving_audio, work, "voice") if driving_audio else None
-            template_path = _save_upload(template_face, work, "template") if template_face else None
+            audio_path = _save_upload(driving_audio, work, "voice")
+            template_path = (
+                _save_upload(template_face, work, "template") if template_face else source_path
+            )
             driving_path = _save_upload(driving_video, work, "driving") if driving_video else None
-            with st.spinner("กำลังรันไพพ์ไลน์ลิปซิงค์..."):
+            with st.spinner("กำลังถอดเสียงเป็นคลิปปาก แล้วสวมหน้ามาสคอต..."):
                 result = generate_lip_sync_pipeline(
                     str(source_path),
-                    driving_audio_path=str(audio_path) if audio_path else None,
+                    driving_audio_path=str(audio_path),
                     output_dir=output_dir,
-                    template_face_path=str(template_path) if template_path else None,
+                    template_face_path=str(template_path),
                     driving_video_path=str(driving_path) if driving_path else None,
                     dry_run=dry_run,
                 )
@@ -455,7 +441,7 @@ def render_lip_sync_page():
                 st.code(" ".join(str(part) for part in step.get("command") or []), language="bash")
             st.caption(f"ไฟล์ปลายทาง: {result.get('output')}")
             return
-        st.success(f"สำเร็จ! เซฟวิดีโอไว้ที่: {result}")
+        st.success(f"✨ สำเร็จ! เซฟวิดีโอไว้ที่: {result}")
         if Path(result).is_file():
             st.video(str(result))
             st.download_button(
@@ -465,3 +451,5 @@ def render_lip_sync_page():
                 mime="video/mp4",
                 use_container_width=True,
             )
+
+

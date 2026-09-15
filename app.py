@@ -228,17 +228,11 @@ st.markdown(
 )
 
 st.sidebar.markdown("**เมนู**")
-app_page = st.sidebar.radio(
+menu = st.sidebar.radio(
     "เมนู",
-    ["studio", "crop", "subtitle", "lipsync"],
-    format_func=lambda key: {
-        "studio": "ค้นหาเรื่อง",
-        "crop": "✂️ ครอปคลิป 9:16",
-        "subtitle": "Auto Subtitle",
-        "lipsync": "🎭 ลิปซิงค์คาแรกเตอร์",
-    }[key],
-    key="app_page",
+    ["ค้นหาเรื่อง", "ครอปคลิป 9:16", "Auto Subtitle", "ลิปซิงค์คาแรกเตอร์"],
     label_visibility="collapsed",
+    key="menu",
 )
 
 
@@ -693,10 +687,10 @@ if st.session_state.history:
         st.session_state.history = []
         st.rerun()
 
-if app_page == "lipsync":
+if menu == "ลิปซิงค์คาแรกเตอร์":
     render_lip_sync_page()
     st.stop()
-if app_page == "crop":
+if menu == "ครอปคลิป 9:16":
     st.markdown('<div class="hero-kicker">Mystery Content Studio</div>', unsafe_allow_html=True)
     st.markdown('<div class="hero-title">ครอปคลิป 9:16</div>', unsafe_allow_html=True)
     if render_vertical_crop_tab:
@@ -704,7 +698,7 @@ if app_page == "crop":
     else:
         st.info("หน้านี้ใช้ไฟล์ video_crop.py — ยังไม่พบในโฟลเดอร์โปรเจกต์นี้")
     st.stop()
-if app_page == "subtitle":
+if menu == "Auto Subtitle":
     if render_auto_subtitle_page:
         render_auto_subtitle_page()
     else:
