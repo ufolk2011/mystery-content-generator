@@ -60,7 +60,49 @@ def run_command(cmd, cwd=None):
 
 
 def ffmpeg_bin():
-    return os.environ.get("FFMPEG_BIN") or shutil.which("ffmpeg")
+    found = os.environ.get("FFMPEG_BIN") or shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
+def discover_model_home(*folder_names):
+    roots = [
+        Path.cwd(),
+        Path.cwd() / "vendor",
+        Path.cwd() / "models",
+        Path.home(),
+        Path.home() / "Documents",
+        Path.home() / "Desktop",
+        Path.home() / "Downloads",
+    ]
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for name in folder_names:
+            candidate = root / name
+            if (candidate / "inference.py").is_file():
+                return candidate
+    return None
+
+
+def apply_discovered_homes():
+    mapping = {
+        "SADTALKER_HOME": ("SadTalker", "sadtalker"),
+        "WAV2LIP_HOME": ("Wav2Lip", "wav2lip"),
+        "LIVEPORTRAIT_HOME": ("LivePortrait", "liveportrait"),
+    }
+    for env_name, folders in mapping.items():
+        if _env_path(env_name):
+            continue
+        found = discover_model_home(*folders)
+        if found:
+            os.environ[env_name] = str(found)
 
 
 def mux_audio(video_path, audio_path, output_path):
@@ -176,6 +218,7 @@ def live_portrait_command(source_image, driving_video, output_dir, extra_args=No
 
 
 def describe_setup():
+    apply_discovered_homes()
     tools = {
         "ffmpeg": bool(ffmpeg_bin()),
         "sadtalker": sadtalker_command("a.wav", "face.jpg", "out") is not None,
@@ -186,6 +229,41 @@ def describe_setup():
     return tools
 
 
+def generate_still_av_clip(image_path, audio_path, output_path):
+    ffmpeg = ffmpeg_bin()
+    if not ffmpeg:
+        raise LipSyncError(
+            "ยังไม่มี ffmpeg สำหรับประกอบคลิป — ในโฟลเดอร์โปรเจกต์รันคำสั่ง "
+            "`pip install imageio-ffmpeg` แล้วเปิด run.bat ใหม่"
+        )
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-loop",
+        "1",
+        "-i",
+        str(image_path),
+        "-i",
+        str(audio_path),
+        "-c:v",
+        "libx264",
+        "-tune",
+        "stillimage",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-pix_fmt",
+        "yuv420p",
+        "-shortest",
+        str(output_path),
+    ]
+    run_command(cmd)
+    return output_path
+
+
 def generate_driving_video(audio_path, template_face_path, output_dir, dry_run=False):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -194,10 +272,7 @@ def generate_driving_video(audio_path, template_face_path, output_dir, dry_run=F
     wav2lip = wav2lip_command(audio_path, template_face_path, target)
     chosen = sadtalker or wav2lip
     if chosen is None:
-        raise LipSyncError(
-            "ยังไม่พบ SadTalker หรือ Wav2Lip — ตั้งค่า SADTALKER_HOME หรือ WAV2LIP_HOME "
-            "หรืออัปโหลด Driving Video พร้อมใช้เพื่อข้ามขั้นตอนนี้"
-        )
+        return None
     cmd, cwd = chosen
     if dry_run:
         return {"command": cmd, "cwd": str(cwd), "output": str(target)}
@@ -251,10 +326,10 @@ def generate_lip_sync_pipeline(
 ):
     """Audio → talking-face driving video → LivePortrait on the mascot still.
 
-    Step 1 uses SadTalker (preferred) or Wav2Lip when a talking-face template is
-    available. Pass an existing driving_video_path to skip that step.
-    Step 2 always runs LivePortrait with the real character still.
+    If SadTalker / Wav2Lip / LivePortrait are not installed, fall back to a
+    still-image clip with the uploaded voiceover so the button still produces a video.
     """
+    apply_discovered_homes()
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     source_image = require_file(source_image_path, "รูปคาแรกเตอร์")
@@ -274,47 +349,66 @@ def generate_lip_sync_pipeline(
     template_face = template_face_path or _env_path("LIPSYNC_TEMPLATE_FACE")
     if template_face:
         template_face = require_file(template_face, "รูปหน้าเทมเพลต")
+    elif audio_path:
+        template_face = source_image
 
-    plan = {"steps": []}
-    if driving_video is None:
-        if audio_path is None:
-            raise LipSyncError("ต้องมีไฟล์เสียงพากย์ หรือ Driving Video อย่างน้อยอย่างใดอย่างหนึ่ง")
-        if template_face is None:
-            raise LipSyncError(
-                "ขั้นตอนสร้าง Driving Video ต้องมีรูปหน้าเทมเพลต (template_face) "
-                "เช่น ใบหน้าตรงกล้องสำหรับ SadTalker / Wav2Lip"
+    can_drive = bool(
+        driving_video
+        or sadtalker_command("a.wav", "face.jpg", "out")
+        or wav2lip_command("a.wav", "face.jpg", "out.mp4")
+    )
+    can_portrait = live_portrait_command("src.jpg", "drive.mp4", "out") is not None
+    final_path = output_dir / "final_mascot_output.mp4"
+
+    if dry_run:
+        plan = {"steps": [], "output": str(final_path), "mode": "full"}
+        if not can_drive or not can_portrait:
+            plan["mode"] = "fallback"
+            plan["steps"].append(
+                {
+                    "command": ["ffmpeg", "-loop", "1", "-i", str(source_image), "-i", str(audio_path or "")],
+                    "cwd": str(output_dir),
+                }
             )
-        print("--- [1/2] กำลังแปลงไฟล์เสียงเป็น Driving Video ---")
-        if dry_run:
+            return plan
+        if driving_video is None:
             plan["steps"].append(
                 generate_driving_video(audio_path, template_face, output_dir, dry_run=True)
             )
             driving_video = output_dir / "driving_face.mp4"
-        else:
-            driving_video = generate_driving_video(audio_path, template_face, output_dir)
-    else:
-        copied = output_dir / "driving_face.mp4"
-        if not dry_run:
-            shutil.copy2(driving_video, copied)
-            driving_video = copied
-        print("--- [1/2] ใช้ Driving Video ที่อัปโหลดแล้ว ข้าม Audio-to-Video ---")
-
-    print("--- [2/2] กำลังรัน LivePortrait เพื่อสวมหน้าคาแรกเตอร์จริง ---")
-    final_path = output_dir / "final_mascot_output.mp4"
-    if dry_run:
         plan["steps"].append(
             generate_live_portrait(source_image, driving_video, output_dir, dry_run=True)
         )
-        plan["output"] = str(final_path)
         return plan
 
+    if (not can_drive or not can_portrait) and audio_path:
+        print("--- ยังไม่มีโมเดลขยับปาก กำลังประกอบคลิปรูปนิ่งกับเสียงพากย์ ---")
+        generate_still_av_clip(source_image, audio_path, final_path)
+        print(f"✨ สำเร็จ! เซฟวิดีโอไว้ที่: {final_path}")
+        return {"path": str(final_path), "mode": "fallback"}
+
+    if driving_video is None:
+        if audio_path is None:
+            raise LipSyncError("ต้องมีไฟล์เสียงพากย์ หรือ Driving Video อย่างน้อยอย่างใดอย่างหนึ่ง")
+        print("--- [1/2] กำลังแปลงไฟล์เสียงเป็น Driving Video ---")
+        driving_video = generate_driving_video(audio_path, template_face, output_dir)
+        if driving_video is None:
+            generate_still_av_clip(source_image, audio_path, final_path)
+            return {"path": str(final_path), "mode": "fallback"}
+    else:
+        copied = output_dir / "driving_face.mp4"
+        shutil.copy2(driving_video, copied)
+        driving_video = copied
+        print("--- [1/2] ใช้ Driving Video ที่อัปโหลดแล้ว ข้าม Audio-to-Video ---")
+
+    print("--- [2/2] กำลังรัน LivePortrait เพื่อสวมหน้าคาแรกเตอร์จริง ---")
     portrait = generate_live_portrait(source_image, driving_video, output_dir)
     if audio_path and ffmpeg_bin():
         mux_audio(portrait, audio_path, final_path)
     else:
         shutil.copy2(portrait, final_path)
     print(f"✨ สำเร็จ! เซฟวิดีโอไว้ที่: {final_path}")
-    return str(final_path)
+    return {"path": str(final_path), "mode": "full"}
 
 
 def _save_upload(upload, folder, prefix):
@@ -363,7 +457,13 @@ def render_lip_sync_page():
                 st.caption(f"ไฟล์เสียง: {driving_audio.name}")
 
     tools = describe_setup()
-    with st.expander("ตั้งค่าโมเดลหลังบ้าน"):
+    models_ready = tools["liveportrait"] and (tools["sadtalker"] or tools["wav2lip"])
+    if not models_ready:
+        st.info(
+            "เครื่องนี้ยังไม่มี SadTalker / LivePortrait กดเรนเดอร์ได้เลย "
+            "ระบบจะทำคลิปรูปมาสคอตพร้อมเสียงพากย์ก่อน (ปากยังไม่ขยับจนกว่าจะติดตั้งโมเดล)"
+        )
+    with st.expander("ตั้งค่าโมเดลหลังบ้าน", expanded=False):
         if not tools["liveportrait"] or (not tools["sadtalker"] and not tools["wav2lip"]):
             st.caption(
                 "ตั้ง `LIVEPORTRAIT_HOME` และ `SADTALKER_HOME` หรือ `WAV2LIP_HOME` "
@@ -392,7 +492,7 @@ def render_lip_sync_page():
             os.environ["WAV2LIP_HOME"] = wav_home.strip()
         dry_run = st.checkbox(
             "ทดลองดูคำสั่งก่อนรันจริง (dry run)",
-            value=not describe_setup()["liveportrait"],
+            value=False,
         )
         output_dir = st.text_input("โฟลเดอร์ผลลัพธ์", value="output")
         template_face = st.file_uploader(
@@ -437,17 +537,28 @@ def render_lip_sync_page():
         if dry_run:
             st.info("โหมดทดลอง — ยังไม่ได้เรียกโมเดลจริง")
             for index, step in enumerate(result.get("steps") or [], start=1):
+                if not step:
+                    continue
                 st.markdown(f"**ขั้นที่ {index}**  cwd: `{step.get('cwd', '')}`")
                 st.code(" ".join(str(part) for part in step.get("command") or []), language="bash")
             st.caption(f"ไฟล์ปลายทาง: {result.get('output')}")
             return
-        st.success(f"✨ สำเร็จ! เซฟวิดีโอไว้ที่: {result}")
-        if Path(result).is_file():
-            st.video(str(result))
+        if isinstance(result, str):
+            result = {"path": result, "mode": "full"}
+        video_path = result.get("path") or result.get("output")
+        if result.get("mode") == "fallback":
+            st.warning(
+                "ยังไม่มีโมเดลขยับปากบนเครื่องนี้ จึงได้คลิปรูปนิ่งพร้อมเสียงพากย์ "
+                "ถ้าต้องการปากขยับ ให้ติดตั้ง SadTalker หรือ Wav2Lip และ LivePortrait แล้วใส่ path ในตั้งค่าโมเดลหลังบ้าน"
+            )
+        else:
+            st.success(f"✨ สำเร็จ! เซฟวิดีโอไว้ที่: {video_path}")
+        if video_path and Path(video_path).is_file():
+            st.video(str(video_path))
             st.download_button(
                 "📥 ดาวน์โหลดคลิปสุดท้าย",
-                data=Path(result).read_bytes(),
-                file_name=Path(result).name,
+                data=Path(video_path).read_bytes(),
+                file_name=Path(video_path).name,
                 mime="video/mp4",
                 use_container_width=True,
             )

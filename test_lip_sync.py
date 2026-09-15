@@ -89,6 +89,27 @@ class LipSyncPipelineTests(unittest.TestCase):
         chosen = lip_sync.newest_video(folder)
         self.assertEqual(chosen.name, "result.mp4")
 
+    def test_fallback_without_models(self):
+        source = self.workdir / "face.png"
+        audio = self.workdir / "voice.wav"
+        source.write_bytes(b"x")
+        audio.write_bytes(b"RIFF")
+
+        def fake_still(image, audio_path, dest):
+            dest = Path(dest)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"mp4")
+            return dest
+
+        with patch.object(lip_sync, "generate_still_av_clip", side_effect=fake_still):
+            result = lip_sync.generate_lip_sync_pipeline(
+                str(source),
+                driving_audio_path=str(audio),
+                output_dir=str(self.workdir / "output"),
+            )
+        self.assertEqual(result["mode"], "fallback")
+        self.assertTrue(Path(result["path"]).is_file())
+
 
 class InstallLipSyncMenuTests(unittest.TestCase):
     def test_patches_studio_crop_subtitle_keys(self):
