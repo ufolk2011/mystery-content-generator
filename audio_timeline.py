@@ -64,6 +64,19 @@ def _extract_json(text):
         return json.loads(match.group(1))
 
 
+def count_thai_chars(text):
+    return sum(1 for char in str(text or "") if "\u0e00" <= char <= "\u0e7f")
+
+
+def looks_like_thai(text):
+    return count_thai_chars(text) >= 4
+
+
+def looks_like_english(text):
+    letters = sum(1 for char in str(text or "") if char.isascii() and char.isalpha())
+    return letters >= 8 and count_thai_chars(text) < 4
+
+
 def normalize_segments(payload):
     if isinstance(payload, dict):
         for key in ("segments", "scenes", "timeline", "beats", "items"):
@@ -83,8 +96,28 @@ def normalize_segments(payload):
         end = parse_seconds(item.get("end") or item.get("end_sec") or item.get("to") or start)
         if end < start:
             end = start
-        thai = str(item.get("th") or item.get("thai") or item.get("text_th") or item.get("text") or "").strip()
-        english = str(item.get("en") or item.get("english") or item.get("text_en") or "").strip()
+        thai = str(
+            item.get("thai")
+            or item.get("th")
+            or item.get("text_th")
+            or ""
+        ).strip()
+        english = str(
+            item.get("english")
+            or item.get("en")
+            or item.get("text_en")
+            or ""
+        ).strip()
+        raw_text = str(item.get("text") or item.get("transcript") or "").strip()
+        if raw_text:
+            if looks_like_thai(raw_text) and not thai:
+                thai = raw_text
+            elif looks_like_english(raw_text) and not english:
+                english = raw_text
+        if looks_like_english(thai) and not english:
+            english = thai
+        if looks_like_english(thai) and looks_like_thai(english):
+            thai, english = english, thai
         raw_keywords = item.get("keywords") or item.get("broll") or item.get("clips") or []
         if isinstance(raw_keywords, str):
             keywords = [part.strip() for part in re.split(r"[,;\n|/]", raw_keywords) if part.strip()]
@@ -115,17 +148,62 @@ def timeline_prompt():
 แต่ละช่วงเป็น object ตามนี้:
 - start: วินาทีเริ่มต้น (ตัวเลข)
 - end: วินาทีสิ้นสุด (ตัวเลข)
-- th: สิ่งที่พูดช่วงนี้ ภาษาไทย
-- en: คำแปลภาษาอังกฤษ
-- keywords: array วลีอังกฤษ 2-3 ชุด สำหรับค้นหาคลิป B-roll / ภาพประกอบ เช่น candle in darkness, foggy forest aerial
+- thai: คำแปลหรือถอดเสียงเป็นภาษาไทย ต้องใช้ตัวอักษรไทยเท่านั้น ห้ามวางประโยคภาษาอังกฤษในช่องนี้
+- english: ถอดเสียงหรือคำแปลเป็นภาษาอังกฤษ
+- keywords: array วลีอังกฤษ 2-3 ชุด สำหรับค้นหาคลิป B-roll เช่น car accident wreckage
 
-กฎ:
-- แบ่งตามจังหวะเรื่องหรือประโยค ไม่รวมทั้งคลิปเป็นก้อนเดียว
-- ถ้าเสียงเป็นภาษาไทย ให้ถอดไทยตามที่พูด แล้วแปลอังกฤษ
-- ถ้าเสียงเป็นภาษาอังกฤษ ให้ถอดอังกฤษตามที่พูด แล้วแปลไทย
-- keywords ต้องเป็นภาพที่หาเจอง่ายใน YouTube / Pexels / Pixabay
+กฎสำคัญ:
+- ช่อง thai กับ english ต้องคนละภาษาเสมอ
+- ถ้าเสียงพูดภาษาอังกฤษ: english = ตามคำพูด, thai = แปลเป็นไทยทั้งประโยค
+- ถ้าเสียงพูดภาษาไทย: thai = ตามคำพูด, english = แปลเป็นอังกฤษ
+- ห้ามคัดลอกข้อความอังกฤษไปใส่ช่อง thai
+- แบ่งตามจังหวะเรื่อง ไม่รวมทั้งคลิปเป็นก้อนเดียว
 - ห้ามมี markdown หรือคำอธิบายนอก JSON
 """
+
+
+def fill_thai_translations(client, model_name, segments):
+    pending = []
+    for index, seg in enumerate(segments):
+        source = seg.get("en") or seg.get("th") or ""
+        if looks_like_thai(seg.get("th", "")):
+            continue
+        if not source:
+            continue
+        pending.append({"i": index, "en": source})
+    if not pending:
+        return segments
+    prompt = (
+        "แปลค่า en ของแต่ละข้อเป็นภาษาไทยที่เป็นธรรมชาติ สำหรับพากย์คลิปสั้น\n"
+        "ตอบเป็น JSON object เท่านั้น มีคีย์ items เป็น array ของ {i, thai}\n"
+        "ช่อง thai ต้องเป็นตัวอักษรไทยเท่านั้น ห้ามตอบเป็นภาษาอังกฤษ\n"
+        f"{json.dumps(pending, ensure_ascii=False)}"
+    )
+    response = client.models.generate_content(
+        model=model_name,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            thinking_config=types.ThinkingConfig(thinking_level="low"),
+        ),
+    )
+    payload = _extract_json(response.text)
+    items = payload.get("items", payload) if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        return segments
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = int(item.get("i"))
+        except (TypeError, ValueError):
+            continue
+        thai = str(item.get("thai") or item.get("th") or "").strip()
+        if 0 <= index < len(segments) and looks_like_thai(thai):
+            if looks_like_english(segments[index].get("th", "")):
+                segments[index]["en"] = segments[index].get("en") or segments[index]["th"]
+            segments[index]["th"] = thai
+    return segments
 
 
 def transcribe_voice_timeline(client, model_name, audio_bytes, filename):
@@ -144,7 +222,7 @@ def transcribe_voice_timeline(client, model_name, audio_bytes, filename):
     segments = normalize_segments(_extract_json(response.text))
     if not segments:
         raise ValueError("ถอดเสียงแล้วแต่ยังไม่ได้ช่วงเวลา")
-    return segments
+    return fill_thai_translations(client, model_name, segments)
 
 
 def clip_search_links(keyword):
@@ -220,7 +298,7 @@ def render_audio_timeline_page(embed=False):
         key=f"{key_prefix}_transcribe_voice",
     ):
         try:
-            with st.spinner("กำลังฟังเสียง แยกช่วงเวลา และหาคลิปประกอบ..."):
+            with st.spinner("กำลังฟังเสียง แปลไทย/อังกฤษ และหาคลิปประกอบ..."):
                 audio_bytes = bytes(uploaded_voice.getbuffer())
                 client = genai.Client(api_key=api_key)
                 st.session_state.voice_timeline = transcribe_voice_timeline(

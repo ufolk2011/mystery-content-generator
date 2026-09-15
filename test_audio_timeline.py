@@ -35,6 +35,23 @@ class AudioTimelineTests(unittest.TestCase):
         self.assertEqual(segments[1]["th"], "แต่ความจริงไม่เป็นแบบนั้น")
         self.assertEqual(audio_timeline.format_clock(segments[1]["end"]), "00:12")
 
+    def test_english_copy_in_thai_field_is_detected(self):
+        self.assertTrue(audio_timeline.looks_like_english("The Pollock family lost their two young daughters"))
+        self.assertFalse(audio_timeline.looks_like_thai("The Pollock family lost their two young daughters"))
+        payload = {
+            "segments": [
+                {
+                    "start": 0,
+                    "end": 8,
+                    "th": "The Pollock family lost their two young daughters",
+                    "en": "The Pollock family lost their two young daughters",
+                }
+            ]
+        }
+        segments = audio_timeline.normalize_segments(payload)
+        self.assertTrue(audio_timeline.looks_like_english(segments[0]["th"]))
+        self.assertTrue(audio_timeline.looks_like_english(segments[0]["en"]))
+
 
 if __name__ == "__main__":
     unittest.main()
