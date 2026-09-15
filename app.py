@@ -11,7 +11,6 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from tts import safe_filename, spoken_script, synthesize
-from lip_sync import render_lip_sync_page
 
 try:
     from video_crop import render_vertical_crop_tab
@@ -230,7 +229,7 @@ st.markdown(
 st.sidebar.markdown("**เมนู**")
 menu = st.sidebar.radio(
     "เมนู",
-    ["ค้นหาเรื่อง", "✂️ ครอปคลิป 9:16", "Auto Subtitle", "ลิปซิงค์คาแรกเตอร์"],
+    ["ค้นหาเรื่อง", "✂️ ครอปคลิป 9:16", "Auto Subtitle"],
     label_visibility="collapsed",
     key="menu",
 )
@@ -695,9 +694,6 @@ if st.session_state.history:
         st.session_state.history = []
         st.rerun()
 
-if menu == "ลิปซิงค์คาแรกเตอร์":
-    render_lip_sync_page()
-    st.stop()
 if menu in ("ครอปคลิป 9:16", "✂️ ครอปคลิป 9:16"):
     st.markdown('<div class="hero-kicker">Mystery Content Studio</div>', unsafe_allow_html=True)
     st.markdown('<div class="hero-title">ครอปคลิป 9:16</div>', unsafe_allow_html=True)
