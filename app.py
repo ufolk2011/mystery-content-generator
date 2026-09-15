@@ -788,6 +788,19 @@ with tab1:
 
 with tab2:
     st.subheader("🎵 อัปโหลดไฟล์เสียงพากย์เพื่อสร้างไทม์ไลน์ภาพประกอบ")
+    uploaded_voice = st.file_uploader(
+        "เลือกไฟล์เสียงพากย์ (.mp3 / .wav / .m4a)",
+        type=["mp3", "wav", "m4a", "aac", "ogg"],
+        key="timeline_voice_upload",
+    )
+    if uploaded_voice is not None:
+        st.audio(uploaded_voice)
+        st.caption(f"ไฟล์ที่เลือก: {uploaded_voice.name}")
+        st.session_state.timeline_uploaded_audio_name = uploaded_voice.name
+    else:
+        st.caption("ยังไม่มีไฟล์เสียง — อัปโหลด .mp3 / .wav / .m4a ได้เลยด้านบน")
+
+    st.markdown("---")
     st.info("เลือกเรื่องจากแท็บ 1 หรือเรื่องที่เก็บไว้ แล้วแตกฉากหาคลิปประกอบได้ด้านล่าง")
     saved_or_results = list(st.session_state.results) + [
         {**item, "id": f"saved-{idx}"} for idx, item in enumerate(st.session_state.saved)
