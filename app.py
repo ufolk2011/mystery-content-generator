@@ -11,6 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from tts import safe_filename, spoken_script, synthesize
+from lip_sync import render_lip_sync_page
 
 st.set_page_config(page_title="Mystery Content Generator", layout="wide")
 
@@ -217,6 +218,15 @@ st.markdown(
 )
 
 st.sidebar.markdown("### ตั้งค่าระบบ")
+app_page = st.sidebar.radio(
+    "หน้า",
+    ["studio", "lipsync"],
+    format_func=lambda key: {
+        "studio": "ค้นหาเรื่อง",
+        "lipsync": "🎭 ลิปซิงค์คาแรกเตอร์",
+    }[key],
+    key="app_page",
+)
 st.sidebar.caption("ใส่คีย์แล้วเลือกเสียงก่อนเริ่มค้นหาเรื่อง")
 default_key = os.environ.get("GEMINI_API_KEY", "")
 api_key = st.sidebar.text_input(
@@ -666,6 +676,10 @@ if st.session_state.history:
         save_history([])
         st.session_state.history = []
         st.rerun()
+
+if app_page == "lipsync":
+    render_lip_sync_page()
+    st.stop()
 
 st.markdown('<div class="hero-kicker">Mystery Content Studio</div>', unsafe_allow_html=True)
 st.markdown('<div class="hero-title">AI ค้นหาเรื่องลึกลับ</div>', unsafe_allow_html=True)
