@@ -53,9 +53,40 @@ class LipSyncTests(unittest.TestCase):
                 handle.setsampwidth(2)
                 handle.setframerate(sample_rate)
                 handle.writeframes(pcm)
-            result = lip_sync.make_lip_sync_clip(image, audio, out, fps=10)
+            result = lip_sync.make_lip_sync_clip(
+                image, audio, out, fps=10, install_if_missing=False
+            )
             self.assertTrue(Path(result).is_file())
             self.assertGreater(Path(result).stat().st_size, 1000)
+
+    def test_ffmpeg_fallback_muxes_without_moviepy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            image = tmp / "mascot.png"
+            audio = tmp / "voice.wav"
+            out = tmp / "out.mp4"
+            try:
+                from PIL import Image
+            except ImportError:
+                self.skipTest("Pillow not installed")
+            Image.new("RGB", (64, 80), (40, 90, 200)).save(image)
+            sample_rate = 22050
+            n_samples = int(sample_rate * 0.35)
+            pcm = b"".join(
+                struct.pack(
+                    "<h",
+                    int(0.2 * math.sin(2 * math.pi * 440 * index / sample_rate) * 32767),
+                )
+                for index in range(n_samples)
+            )
+            with wave.open(str(audio), "w") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(sample_rate)
+                handle.writeframes(pcm)
+            lip_sync._mux_with_ffmpeg(image, audio, out, fps=10)
+            self.assertTrue(out.is_file())
+            self.assertGreater(out.stat().st_size, 1000)
 
 
 if __name__ == "__main__":

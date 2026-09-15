@@ -1,3 +1,6 @@
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
@@ -8,17 +11,38 @@ class LipSyncError(RuntimeError):
     """Raised when the still+audio clip cannot be assembled."""
 
 
-def _load_moviepy():
+def _import_moviepy():
     try:
         from moviepy import AudioFileClip, ImageClip
+
+        return ImageClip, AudioFileClip
     except ImportError:
+        from moviepy.editor import AudioFileClip, ImageClip
+
+        return ImageClip, AudioFileClip
+
+
+def _pip_install(packages):
+    completed = subprocess.run(
+        [sys.executable, "-m", "pip", "install", *packages],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed.returncode == 0
+
+
+def _load_moviepy(install_if_missing=True):
+    try:
+        return _import_moviepy()
+    except ImportError:
+        pass
+    if install_if_missing and _pip_install(["moviepy>=2.0.0", "imageio-ffmpeg>=0.5.1"]):
         try:
-            from moviepy.editor import AudioFileClip, ImageClip
-        except ImportError as err:
-            raise LipSyncError(
-                "ไม่พบ moviepy — รัน `pip install moviepy` ในโฟลเดอร์โปรเจกต์"
-            ) from err
-    return ImageClip, AudioFileClip
+            return _import_moviepy()
+        except ImportError:
+            pass
+    return None
 
 
 def _with_duration(clip, duration):
@@ -39,29 +63,29 @@ def _resized(clip, **kwargs):
     return clip.resize(**kwargs)
 
 
-def make_lip_sync_clip(
-    image_path,
-    audio_path,
-    output_path="output/lip_sync.mp4",
-    fps=24,
-    max_width=720,
-):
-    """Mux a mascot still with audio via moviepy. Does not load neural talking-head models."""
-    image_path = Path(image_path)
-    audio_path = Path(audio_path)
-    output_path = Path(output_path)
-    if image_path.suffix.lower() not in IMAGE_SUFFIXES:
-        raise LipSyncError("รูปต้องเป็น .jpg / .png")
-    if audio_path.suffix.lower() not in AUDIO_SUFFIXES:
-        raise LipSyncError("เสียงต้องเป็น .mp3 / .wav / .m4a")
-    if not image_path.is_file():
-        raise LipSyncError(f"ไม่พบรูป: {image_path}")
-    if not audio_path.is_file():
-        raise LipSyncError(f"ไม่พบไฟล์เสียง: {audio_path}")
+def ffmpeg_exe():
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
 
-    ImageClip, AudioFileClip = _load_moviepy()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        if _pip_install(["imageio-ffmpeg>=0.5.1"]):
+            try:
+                import imageio_ffmpeg
 
+                return imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception:
+                pass
+    raise LipSyncError(
+        "ไม่พบเครื่องมือตัดต่อวิดีโอ — ปิดแล้วเปิด run.bat ใหม่ "
+        "หรือรัน `.venv\\Scripts\\python.exe -m pip install moviepy imageio-ffmpeg`"
+    )
+
+
+def _mux_with_moviepy(image_path, audio_path, output_path, fps, max_width, ImageClip, AudioFileClip):
     audio = None
     video = None
     try:
@@ -89,10 +113,6 @@ def make_lip_sync_clip(
             audio_codec="aac",
             logger=None,
         )
-    except LipSyncError:
-        raise
-    except Exception as err:
-        raise LipSyncError(f"รวมคลิปไม่สำเร็จ: {err}") from err
     finally:
         for clip in (video, audio):
             if clip is not None:
@@ -100,6 +120,86 @@ def make_lip_sync_clip(
                     clip.close()
                 except Exception:
                     pass
+
+
+def _mux_with_ffmpeg(image_path, audio_path, output_path, fps):
+    ffmpeg = ffmpeg_exe()
+    completed = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-loop",
+            "1",
+            "-framerate",
+            str(int(fps)),
+            "-i",
+            str(image_path),
+            "-i",
+            str(audio_path),
+            "-vf",
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-c:v",
+            "libx264",
+            "-tune",
+            "stillimage",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ],
+        check=False,
+        capture_output=True,
+    )
+    if completed.returncode != 0 or not output_path.is_file():
+        detail = (completed.stderr or b"").decode("utf-8", errors="ignore")[-400:]
+        raise LipSyncError(f"รวมคลิปไม่สำเร็จ\n{detail}")
+
+
+def make_lip_sync_clip(
+    image_path,
+    audio_path,
+    output_path="output/lip_sync.mp4",
+    fps=24,
+    max_width=720,
+    install_if_missing=True,
+):
+    """Mux a mascot still with audio. Uses moviepy when available, otherwise ffmpeg."""
+    image_path = Path(image_path)
+    audio_path = Path(audio_path)
+    output_path = Path(output_path)
+    if image_path.suffix.lower() not in IMAGE_SUFFIXES:
+        raise LipSyncError("รูปต้องเป็น .jpg / .png")
+    if audio_path.suffix.lower() not in AUDIO_SUFFIXES:
+        raise LipSyncError("เสียงต้องเป็น .mp3 / .wav / .m4a")
+    if not image_path.is_file():
+        raise LipSyncError(f"ไม่พบรูป: {image_path}")
+    if not audio_path.is_file():
+        raise LipSyncError(f"ไม่พบไฟล์เสียง: {audio_path}")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    loaded = _load_moviepy(install_if_missing=install_if_missing)
+    try:
+        if loaded is not None:
+            ImageClip, AudioFileClip = loaded
+            _mux_with_moviepy(
+                image_path,
+                audio_path,
+                output_path,
+                fps,
+                max_width,
+                ImageClip,
+                AudioFileClip,
+            )
+        else:
+            _mux_with_ffmpeg(image_path, audio_path, output_path, fps)
+    except LipSyncError:
+        raise
+    except Exception as err:
+        raise LipSyncError(f"รวมคลิปไม่สำเร็จ: {err}") from err
 
     if not output_path.is_file():
         raise LipSyncError("รวมคลิปไม่สำเร็จ")
@@ -111,7 +211,7 @@ def render_lip_sync_page():
 
     st.subheader("ลิปซิงค์มาสคอต")
     st.write(
-        "อัปโหลดรูปมาสคอตกับไฟล์เสียง แล้วรวมเป็นวิดีโอทันทีด้วย moviepy "
+        "อัปโหลดรูปมาสคอตกับไฟล์เสียง แล้วรวมเป็นวิดีโอทันที "
         "ไม่ต้องโหลดโมเดล AI"
     )
 
