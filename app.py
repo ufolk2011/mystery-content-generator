@@ -25,6 +25,22 @@ except ImportError:
     transcribe_voice_timeline = None
 
 try:
+    from audio_timeline import with_broll_style
+except ImportError:
+    BROLL_STYLE_SUFFIX = (
+        "vintage archival photo style, grainy old documentary look, "
+        "dark moody cinematic, historical true crime aesthetic"
+    )
+
+    def with_broll_style(keyword):
+        base = str(keyword or "").strip().rstrip(",")
+        if not base:
+            return BROLL_STYLE_SUFFIX
+        if "vintage archival photo style" in base.lower():
+            return base
+        return f"{base}, {BROLL_STYLE_SUFFIX}"
+
+try:
     from video_crop import render_vertical_crop_tab
 except ImportError:
     render_vertical_crop_tab = None
@@ -386,12 +402,12 @@ def normalize_keywords(raw):
 
 
 def clip_search_links(keyword):
-    visual = f"{keyword} cinematic b-roll stock footage"
+    visual = with_broll_style(keyword)
     return [
         ("YouTube", f"https://www.youtube.com/results?search_query={quote_plus(visual)}"),
-        ("Pexels", f"https://www.pexels.com/search/videos/{quote(keyword)}/"),
-        ("Pixabay", f"https://pixabay.com/videos/search/{quote(keyword)}/"),
-        ("Coverr", f"https://coverr.co/search?q={quote_plus(keyword)}"),
+        ("Pexels", f"https://www.pexels.com/search/videos/{quote(visual)}/"),
+        ("Pixabay", f"https://pixabay.com/videos/search/{quote(visual)}/"),
+        ("Coverr", f"https://coverr.co/search?q={quote_plus(visual)}"),
     ]
 
 
@@ -408,7 +424,10 @@ def broll_prompt(title, script):
 ตอบเป็น JSON object เท่านั้น มี 4 คีย์: hook, context, twist, reveal
 แต่ละคีย์เป็น array ของคีย์เวิร์ดภาษาอังกฤษ 2-3 ชุด
 แต่ละชุดเป็นวลีสั้นๆ สำหรับค้นหาคลิปวิดีโอใน YouTube / Pexels / Pixabay
-เน้นภาพที่หาเจอง่าย เช่น dark hallway, candle in darkness, old photograph, city night traffic
+แล้วต้องต่อท้ายทุกชุดด้วย suffix นี้เสมอ:
+, vintage archival photo style, grainy old documentary look, dark moody cinematic, historical true crime aesthetic
+ตัวอย่าง: twin babies family, vintage archival photo style, grainy old documentary look, dark moody cinematic, historical true crime aesthetic
+ห้ามออกคีย์เวิร์ดสั้นๆ โดยไม่มี suffix คุมโทนวินเทจ/สารคดีดาร์ก
 ห้ามใส่คำอธิบายอื่น
 """
 
@@ -570,7 +589,7 @@ def render_voice_segments(segments, ui_key="voice-tl"):
             continue
         st.caption("หาพาก / คลิปประกอบจากช่วงนี้")
         for k_idx, keyword in enumerate(keywords[:3]):
-            st.caption(f"คีย์เวิร์ด: `{keyword}`")
+            st.caption(f"คีย์เวิร์ด: `{with_broll_style(keyword)}`")
             cols = st.columns(4)
             for col, (name, url) in zip(cols, clip_search_links(keyword)):
                 col.link_button(
@@ -645,7 +664,7 @@ def render_broll_finder(audio_key, title, script, existing=None, topic=None, ui_
             continue
         st.markdown(f"<div class='script-label' style='color:#111111;margin:8px 0 4px'>{label}</div>", unsafe_allow_html=True)
         for idx, keyword in enumerate(keywords[:2]):
-            st.caption(f"คีย์เวิร์ด: `{keyword}`")
+            st.caption(f"คีย์เวิร์ด: `{with_broll_style(keyword)}`")
             cols = st.columns(4)
             for col, (name, url) in zip(cols, clip_search_links(keyword)):
                 col.link_button(name, url, use_container_width=True, key=f"clip-{widget_key}-{key}-{idx}-{name}")
@@ -807,7 +826,9 @@ with tab1:
   - reveal: เฉลย (ประโยคอธิบายความจริงที่ต่างออกไป)
 - video_keywords: object มี 4 คีย์ hook, context, twist, reveal
   แต่ละคีย์เป็น array ของคีย์เวิร์ดภาษาอังกฤษ 2-3 ชุด สำหรับค้นหาคลิป B-roll ใน YouTube / Pexels / Pixabay
-  ใช้วลีสั้นที่หาภาพเจอง่าย เช่น dark hallway night, candle flickering, old photograph close up
+  ใช้วลีสั้นที่หาภาพเจอง่าย แล้วต่อท้ายทุกชุดด้วย:
+  , vintage archival photo style, grainy old documentary look, dark moody cinematic, historical true crime aesthetic
+  ตัวอย่าง: twin babies family, vintage archival photo style, grainy old documentary look, dark moody cinematic, historical true crime aesthetic
 
 สคริปต์รวมทุกส่วนแล้วพูดจบใน 30-60 วินาที ใช้ภาษาไทยที่เป็นธรรมชาติ
 """

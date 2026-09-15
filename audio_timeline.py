@@ -121,11 +121,15 @@ def normalize_segments(payload):
             thai, english = english, thai
         raw_keywords = item.get("keywords") or item.get("broll") or item.get("clips") or []
         if isinstance(raw_keywords, str):
-            keywords = [part.strip() for part in re.split(r"[,;\n|/]", raw_keywords) if part.strip()]
+            if "vintage archival photo style" in raw_keywords.lower():
+                keywords = [raw_keywords.strip()]
+            else:
+                keywords = [part.strip() for part in re.split(r"[,;\n|/]", raw_keywords) if part.strip()]
         elif isinstance(raw_keywords, list):
             keywords = [str(part).strip() for part in raw_keywords if str(part).strip()]
         else:
             keywords = []
+        keywords = [with_broll_style(item) for item in keywords[:3] if str(item).strip()]
         if not thai and not english:
             continue
         segments.append(
@@ -217,13 +221,17 @@ def timeline_prompt():
 - end: วินาทีสิ้นสุด (ตัวเลข)
 - thai: คำแปลหรือถอดเสียงเป็นภาษาไทย ต้องใช้ตัวอักษรไทยเท่านั้น ห้ามวางประโยคภาษาอังกฤษในช่องนี้
 - english: ถอดเสียงหรือคำแปลเป็นภาษาอังกฤษ
-- keywords: array วลีอังกฤษ 2-3 ชุด สำหรับค้นหาคลิป B-roll เช่น car accident wreckage
+- keywords: array วลีอังกฤษ 2-3 ชุด สำหรับค้นหาคลิป B-roll
+  แต่ละชุดต้องขึ้นต้นด้วยภาพที่หาเจอ แล้วต่อท้ายเสมอด้วย:
+  , vintage archival photo style, grainy old documentary look, dark moody cinematic, historical true crime aesthetic
+  ตัวอย่าง: twin babies family, vintage archival photo style, grainy old documentary look, dark moody cinematic, historical true crime aesthetic
 
 กฎสำคัญ:
 - ช่อง thai กับ english ต้องคนละภาษาเสมอ
 - ถ้าเสียงพูดภาษาอังกฤษ: english = ตามคำพูด, thai = แปลเป็นไทยทั้งประโยค
 - ถ้าเสียงพูดภาษาไทย: thai = ตามคำพูด, english = แปลเป็นอังกฤษ
 - ห้ามคัดลอกข้อความอังกฤษไปใส่ช่อง thai
+- ทุกคีย์เวิร์ดต้องมี suffix คุมโทนวินเทจ/สารคดีดาร์กครบตามด้านบน ห้ามออกแค่คำสั้นๆ เช่น twin babies family
 - แบ่งตามจังหวะเรื่อง ไม่รวมทั้งคลิปเป็นก้อนเดียว
 - ห้ามมี markdown หรือคำอธิบายนอก JSON
 """
@@ -282,13 +290,28 @@ def transcribe_voice_timeline(client, model_name, audio_bytes, filename):
     return fill_thai_translations(client, model_name, segments)
 
 
+BROLL_STYLE_SUFFIX = (
+    "vintage archival photo style, grainy old documentary look, "
+    "dark moody cinematic, historical true crime aesthetic"
+)
+
+
+def with_broll_style(keyword):
+    base = str(keyword or "").strip().rstrip(",")
+    if not base:
+        return BROLL_STYLE_SUFFIX
+    if "vintage archival photo style" in base.lower():
+        return base
+    return f"{base}, {BROLL_STYLE_SUFFIX}"
+
+
 def clip_search_links(keyword):
-    visual = f"{keyword} cinematic b-roll stock footage"
+    visual = with_broll_style(keyword)
     return [
         ("YouTube", f"https://www.youtube.com/results?search_query={quote_plus(visual)}"),
-        ("Pexels", f"https://www.pexels.com/search/videos/{quote(keyword)}/"),
-        ("Pixabay", f"https://pixabay.com/videos/search/{quote(keyword)}/"),
-        ("Coverr", f"https://coverr.co/search?q={quote_plus(keyword)}"),
+        ("Pexels", f"https://www.pexels.com/search/videos/{quote(visual)}/"),
+        ("Pixabay", f"https://pixabay.com/videos/search/{quote(visual)}/"),
+        ("Coverr", f"https://coverr.co/search?q={quote_plus(visual)}"),
     ]
 
 
@@ -385,7 +408,7 @@ def render_audio_timeline_page(embed=False):
         thai_col.markdown(f"**ไทย**  \n{seg.get('th') or '—'}")
         eng_col.markdown(f"**English**  \n{seg.get('en') or '—'}")
         for k_idx, keyword in enumerate((seg.get("keywords") or [])[:3]):
-            st.caption(f"คลิปประกอบ: `{keyword}`")
+            st.caption(f"คลิปประกอบ: `{with_broll_style(keyword)}`")
             cols = st.columns(4)
             for col, (name, url) in zip(cols, clip_search_links(keyword)):
                 col.link_button(

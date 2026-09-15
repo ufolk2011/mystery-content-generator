@@ -31,7 +31,8 @@ class AudioTimelineTests(unittest.TestCase):
         segments = audio_timeline.normalize_segments(payload)
         self.assertEqual(len(segments), 2)
         self.assertEqual(segments[0]["start"], 0)
-        self.assertIn("candle flickering", segments[0]["keywords"])
+        self.assertTrue(any("candle flickering" in item for item in segments[0]["keywords"]))
+        self.assertIn("vintage archival photo style", segments[0]["keywords"][0])
         self.assertEqual(segments[1]["th"], "แต่ความจริงไม่เป็นแบบนั้น")
         self.assertEqual(audio_timeline.format_clock(segments[1]["end"]), "00:12")
 
@@ -51,6 +52,16 @@ class AudioTimelineTests(unittest.TestCase):
         segments = audio_timeline.normalize_segments(payload)
         self.assertTrue(audio_timeline.looks_like_english(segments[0]["th"]))
         self.assertTrue(audio_timeline.looks_like_english(segments[0]["en"]))
+
+    def test_broll_style_suffix_is_appended(self):
+        styled = audio_timeline.with_broll_style("twin babies family")
+        self.assertTrue(styled.startswith("twin babies family, "))
+        self.assertIn("vintage archival photo style", styled)
+        self.assertIn("grainy old documentary look", styled)
+        self.assertIn("dark moody cinematic", styled)
+        self.assertIn("historical true crime aesthetic", styled)
+        again = audio_timeline.with_broll_style(styled)
+        self.assertEqual(styled, again)
 
     def test_busy_error_detection(self):
         err = RuntimeError("503 UNAVAILABLE. This model is currently experiencing high demand.")
