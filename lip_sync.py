@@ -402,9 +402,20 @@ def render_lip_sync_page():
         )
 
     if source_image:
-        st.image(source_image, caption=source_image.name, width=280)
+        try:
+            st.image(source_image, caption=source_image.name, width=280)
+        except Exception:
+            st.caption(f"อัปโหลดแล้ว: {source_image.name}")
+        try:
+            source_image.seek(0)
+        except Exception:
+            pass
     if driving_audio:
-        st.audio(driving_audio)
+        try:
+            st.audio(driving_audio)
+            driving_audio.seek(0)
+        except Exception:
+            st.caption(f"ไฟล์เสียง: {driving_audio.name}")
 
     output_dir = st.text_input("โฟลเดอร์ผลลัพธ์", value="output")
     dry_run = st.checkbox("ทดลองดูคำสั่งก่อนรันจริง (dry run)", value=not tools["liveportrait"])
