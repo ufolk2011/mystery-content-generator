@@ -12,10 +12,17 @@ import streamlit.components.v1 as components
 
 from tts import safe_filename, spoken_script, synthesize
 from lip_sync import render_lip_sync_page
-from audio_timeline import (
-    format_clock,
-    transcribe_voice_timeline,
-)
+
+try:
+    from audio_timeline import (
+        format_clock,
+        render_audio_timeline_page,
+        transcribe_voice_timeline,
+    )
+except ImportError:
+    format_clock = None
+    render_audio_timeline_page = None
+    transcribe_voice_timeline = None
 
 try:
     from video_crop import render_vertical_crop_tab
@@ -234,7 +241,7 @@ st.markdown(
 st.sidebar.markdown("**เมนู**")
 menu = st.sidebar.radio(
     "เมนู",
-    ["ค้นหาเรื่อง", "✂️ ครอปคลิป 9:16", "Auto Subtitle", "ลิปซิงค์"],
+    ["ค้นหาเรื่อง", "ไทม์ไลน์เสียง", "✂️ ครอปคลิป 9:16", "Auto Subtitle", "ลิปซิงค์"],
     label_visibility="collapsed",
     key="menu",
 )
@@ -736,6 +743,12 @@ if st.session_state.history:
         st.session_state.history = []
         st.rerun()
 
+if menu in ("ไทม์ไลน์เสียง", "ไทม์ไลน์"):
+    if render_audio_timeline_page:
+        render_audio_timeline_page()
+    else:
+        st.error("ไม่พบไฟล์ audio_timeline.py ในโฟลเดอร์โปรเจกต์ — คัดลอกไฟล์นี้มาวางแล้วรีสตาร์ท")
+    st.stop()
 if menu in ("ลิปซิงค์", "สร้างคลิปมาสคอต"):
     render_lip_sync_page()
     st.stop()
@@ -848,6 +861,8 @@ with tab2:
         timeline_model = st.session_state.get("model_name_v2") or "gemini-3.6-flash"
         if not timeline_key:
             st.warning("ใส่ Gemini API Key ที่แท็บ 1 ก่อน เพื่อถอดเสียงตามวินาที")
+        elif not transcribe_voice_timeline:
+            st.error("ไม่พบไฟล์ audio_timeline.py ในโฟลเดอร์โปรเจกต์")
         elif st.button(
             "ถอดเสียงตามวินาที แปลไทย/อังกฤษ และหาคลิปประกอบ",
             type="primary",
@@ -877,7 +892,10 @@ with tab2:
     if st.session_state.voice_timeline:
         st.markdown("---")
         st.subheader("ไทม์ไลน์จากไฟล์เสียง")
-        render_voice_segments(st.session_state.voice_timeline, ui_key="voice-tl")
+        if format_clock:
+            render_voice_segments(st.session_state.voice_timeline, ui_key="voice-tl")
+        else:
+            st.error("ไม่พบไฟล์ audio_timeline.py")
 
     st.markdown("---")
     with st.expander("หรือเลือกเรื่องจากแท็บ 1 / คลัง แล้วหาคลิปจากสคริปต์"):

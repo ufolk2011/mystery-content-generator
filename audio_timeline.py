@@ -1,5 +1,7 @@
 import json
+import os
 import re
+from urllib.parse import quote, quote_plus
 
 from google.genai import types
 
@@ -143,3 +145,112 @@ def transcribe_voice_timeline(client, model_name, audio_bytes, filename):
     if not segments:
         raise ValueError("ถอดเสียงแล้วแต่ยังไม่ได้ช่วงเวลา")
     return segments
+
+
+def clip_search_links(keyword):
+    visual = f"{keyword} cinematic b-roll stock footage"
+    return [
+        ("YouTube", f"https://www.youtube.com/results?search_query={quote_plus(visual)}"),
+        ("Pexels", f"https://www.pexels.com/search/videos/{quote(keyword)}/"),
+        ("Pixabay", f"https://pixabay.com/videos/search/{quote(keyword)}/"),
+        ("Coverr", f"https://coverr.co/search?q={quote_plus(keyword)}"),
+    ]
+
+
+def render_audio_timeline_page():
+    """Standalone page: upload voiceover → timestamped TH/EN → stock clips."""
+    import streamlit as st
+    from google import genai
+
+    if "voice_timeline" not in st.session_state:
+        st.session_state.voice_timeline = []
+
+    st.markdown('<div class="hero-kicker">Mystery Content Studio</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero-title">ไทม์ไลน์เสียงพากย์</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="hero-sub">อัปโหลดไฟล์เสียง ดูว่าวินาทีนี้พูดอะไร แปลไทย/อังกฤษ แล้วหาคลิปประกอบ</div>',
+        unsafe_allow_html=True,
+    )
+
+    api_key = st.text_input(
+        "Gemini API Key",
+        value=st.session_state.get("api_key") or os.environ.get("GEMINI_API_KEY", ""),
+        placeholder="วางคีย์ที่นี่",
+        autocomplete="off",
+        key="timeline_page_gemini_key",
+    )
+    if api_key:
+        st.session_state.api_key = api_key
+    model_name = st.selectbox(
+        "โมเดล",
+        ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"],
+        key="timeline_page_model",
+    )
+
+    st.subheader("1. อัปโหลดไฟล์เสียงพากย์")
+    uploaded_voice = st.file_uploader(
+        "เลือกไฟล์เสียง (.mp3 / .wav / .m4a)",
+        type=["mp3", "wav", "m4a", "aac", "ogg"],
+        key="standalone_voice_upload",
+    )
+    if uploaded_voice is None:
+        st.info("ลากไฟล์เสียงมาวางที่นี่ หรือกด Browse files")
+        return
+
+    if st.session_state.get("voice_tl_source") != uploaded_voice.name:
+        st.session_state.voice_timeline = []
+        st.session_state.voice_tl_source = uploaded_voice.name
+
+    st.audio(uploaded_voice)
+    st.caption(f"ไฟล์ที่เลือก: {uploaded_voice.name}")
+
+    if not api_key:
+        st.warning("ใส่ Gemini API Key ด้านบนก่อน")
+        return
+
+    if st.button(
+        "ถอดเสียงตามวินาที แปลไทย/อังกฤษ และหาคลิปประกอบ",
+        type="primary",
+        use_container_width=True,
+        key="standalone_transcribe_voice",
+    ):
+        try:
+            with st.spinner("กำลังฟังเสียง แยกช่วงเวลา และหาคลิปประกอบ..."):
+                audio_bytes = bytes(uploaded_voice.getbuffer())
+                client = genai.Client(api_key=api_key)
+                st.session_state.voice_timeline = transcribe_voice_timeline(
+                    client,
+                    model_name,
+                    audio_bytes,
+                    uploaded_voice.name,
+                )
+            try:
+                uploaded_voice.seek(0)
+            except Exception:
+                pass
+            st.success(f"ได้ {len(st.session_state.voice_timeline)} ช่วงจากไฟล์เสียง")
+        except Exception as err:
+            st.error(f"ถอดเสียงไม่สำเร็จ: {err}")
+            return
+
+    segments = st.session_state.voice_timeline
+    if not segments:
+        return
+
+    st.markdown("---")
+    st.subheader("2. วินาทีนี้พูดอะไร")
+    for index, seg in enumerate(segments):
+        st.markdown(f"**{format_clock(seg['start'])} – {format_clock(seg['end'])}**")
+        thai_col, eng_col = st.columns(2)
+        thai_col.markdown(f"**ไทย**  \n{seg.get('th') or '—'}")
+        eng_col.markdown(f"**English**  \n{seg.get('en') or '—'}")
+        for k_idx, keyword in enumerate((seg.get("keywords") or [])[:3]):
+            st.caption(f"คลิปประกอบ: `{keyword}`")
+            cols = st.columns(4)
+            for col, (name, url) in zip(cols, clip_search_links(keyword)):
+                col.link_button(
+                    name,
+                    url,
+                    use_container_width=True,
+                    key=f"standalone-tl-{index}-{k_idx}-{name}",
+                )
