@@ -569,9 +569,10 @@ def store_broll(audio_key, broll, topic=None):
     ]
 
 
-def render_broll_finder(audio_key, title, script, existing=None, topic=None):
+def render_broll_finder(audio_key, title, script, existing=None, topic=None, ui_key=None):
     broll = st.session_state.broll.get(audio_key) or normalize_keywords(existing)
-    if st.button("🎬 ค้นหาคลิปประกอบ", key=f"broll-{audio_key}", use_container_width=True):
+    widget_key = ui_key or audio_key
+    if st.button("🎬 ค้นหาคลิปประกอบ", key=f"broll-{widget_key}", use_container_width=True):
         if not has_broll(broll):
             if not api_key:
                 st.error("ใส่ Gemini API Key ก่อนเพื่อให้ AI หาคีย์เวิร์ดคลิป")
@@ -648,7 +649,14 @@ def render_card(topic, tone="yellow"):
     render_script_sections(topic["script"])
     copy_script_button(script_copy_text(topic["title"], topic["script"]), f"copy-{topic['id']}")
     render_tts_controls(topic["id"], topic["title"], topic["script"])
-    render_broll_finder(topic["id"], topic["title"], topic["script"], topic.get("broll"), topic)
+    render_broll_finder(
+        topic["id"],
+        topic["title"],
+        topic["script"],
+        topic.get("broll"),
+        topic,
+        ui_key=f"card-{topic['id']}",
+    )
     keep_col, drop_col = st.columns(2)
     if keep_col.button("💾 เก็บไว้", key=f"keep-{topic['id']}", type="primary", use_container_width=True):
         add_history_title(topic["title"])
@@ -801,6 +809,7 @@ with tab2:
             normalize_script(topic.get("script")),
             topic.get("broll") or topic.get("video_keywords"),
             topic,
+            ui_key=f"timeline-{topic.get('id')}",
         )
 
 with tab3:
@@ -819,12 +828,17 @@ with tab3:
                     script_copy_text(topic.get("title", ""), script),
                     f"copy-saved-{real_index}",
                 )
-                render_tts_controls(f"saved-{real_index}", topic.get("title", "script"), script)
+                render_tts_controls(
+                    f"saved-{real_index}",
+                    topic.get("title", "script"),
+                    script,
+                )
                 render_broll_finder(
                     f"saved-{real_index}",
                     topic.get("title", "script"),
                     script,
                     topic.get("broll") or topic.get("video_keywords"),
+                    ui_key=f"library-{real_index}",
                 )
                 if st.button("ลบออกจากคลัง", key=f"unsave-{real_index}"):
                     saved_stories.pop(real_index)
