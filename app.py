@@ -11,6 +11,17 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from tts import safe_filename, spoken_script, synthesize
+from lip_sync import render_lip_sync_page
+
+try:
+    from video_crop import render_vertical_crop_tab
+except ImportError:
+    render_vertical_crop_tab = None
+
+try:
+    from subtitles import render_auto_subtitle_page
+except ImportError:
+    render_auto_subtitle_page = None
 
 st.set_page_config(page_title="Mystery Content Generator", layout="wide")
 
@@ -216,58 +227,67 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.sidebar.markdown("### ตั้งค่าระบบ")
-st.sidebar.caption("ใส่คีย์แล้วเลือกเสียงก่อนเริ่มค้นหาเรื่อง")
-default_key = os.environ.get("GEMINI_API_KEY", "")
-api_key = st.sidebar.text_input(
-    "Gemini API Key",
-    value=st.session_state.get("api_key", default_key),
-    placeholder="วางคีย์ที่นี่",
-    autocomplete="off",
-)
-if api_key:
-    st.session_state.api_key = api_key
-
-model_name = st.sidebar.selectbox(
-    "โมเดล",
-    ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"],
-    index=0,
-    key="model_name_v2",
+st.sidebar.markdown("**เมนู**")
+menu = st.sidebar.radio(
+    "เมนู",
+    ["ค้นหาเรื่อง", "✂️ ครอปคลิป 9:16", "Auto Subtitle", "ลิปซิงค์คาแรกเตอร์"],
+    label_visibility="collapsed",
+    key="menu",
 )
 
-st.sidebar.subheader("เลือกเสียงพากย์")
-voice_labels = {
-    "male_dark": "ผู้ชายโทนดาร์ก / ลึกลับ",
-    "female": "ผู้หญิง",
-    "gtts": "Google gTTS (ไทย)",
-    "elevenlabs": "ElevenLabs API",
-}
-voice_id = st.sidebar.selectbox(
-    "เสียง",
-    list(voice_labels.keys()),
-    format_func=lambda key: voice_labels[key],
-    key="voice_id",
-)
-eleven_key = ""
-eleven_voice = "male"
-if voice_id == "elevenlabs":
-    eleven_key = st.sidebar.text_input(
-        "ElevenLabs API Key",
-        type="password",
-        value=st.session_state.get("eleven_key", os.environ.get("ELEVENLABS_API_KEY", "")),
+
+def render_settings_panel():
+    default_key = os.environ.get("GEMINI_API_KEY", "")
+    api_key_value = st.text_input(
+        "Gemini API Key",
+        value=st.session_state.get("api_key", default_key),
+        placeholder="วางคีย์ที่นี่",
+        autocomplete="off",
+        key="gemini_key_input",
     )
-    if eleven_key:
-        st.session_state.eleven_key = eleven_key
-    eleven_voice = st.sidebar.selectbox(
-        "เสียง ElevenLabs",
-        ["male", "female"],
-        format_func=lambda key: "ผู้ชายลึกลับ" if key == "male" else "ผู้หญิง",
-        key="eleven_voice",
-    )
-else:
-    st.sidebar.markdown('<div class="sidebar-note">เสียงดาร์กและเสียงผู้หญิงใช้ได้ทันที ไม่ต้องใส่คีย์เพิ่ม</div>', unsafe_allow_html=True)
+    if api_key_value:
+        st.session_state.api_key = api_key_value
 
-st.sidebar.markdown("---")
+    model_value = st.selectbox(
+        "โมเดล",
+        ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"],
+        index=0,
+        key="model_name_v2",
+    )
+    voice_labels = {
+        "male_dark": "ผู้ชายโทนดาร์ก / ลึกลับ",
+        "female": "ผู้หญิง",
+        "gtts": "Google gTTS (ไทย)",
+        "elevenlabs": "ElevenLabs API",
+    }
+    voice_value = st.selectbox(
+        "เสียงพากย์",
+        list(voice_labels.keys()),
+        format_func=lambda key: voice_labels[key],
+        key="voice_id",
+    )
+    eleven_key_value = ""
+    eleven_voice_value = "male"
+    if voice_value == "elevenlabs":
+        eleven_key_value = st.text_input(
+            "ElevenLabs API Key",
+            type="password",
+            value=st.session_state.get("eleven_key", os.environ.get("ELEVENLABS_API_KEY", "")),
+        )
+        if eleven_key_value:
+            st.session_state.eleven_key = eleven_key_value
+        eleven_voice_value = st.selectbox(
+            "เสียง ElevenLabs",
+            ["male", "female"],
+            format_func=lambda key: "ผู้ชายลึกลับ" if key == "male" else "ผู้หญิง",
+            key="eleven_voice",
+        )
+    else:
+        st.markdown(
+            '<div class="sidebar-note">เสียงดาร์กและเสียงผู้หญิงใช้ได้ทันที ไม่ต้องใส่คีย์เพิ่ม</div>',
+            unsafe_allow_html=True,
+        )
+    return api_key_value, model_value, voice_value, eleven_key_value, eleven_voice_value
 
 
 def load_json_list(path):
@@ -667,19 +687,49 @@ if st.session_state.history:
         st.session_state.history = []
         st.rerun()
 
+if menu == "ลิปซิงค์คาแรกเตอร์":
+    render_lip_sync_page()
+    st.stop()
+if menu in ("ครอปคลิป 9:16", "✂️ ครอปคลิป 9:16"):
+    st.markdown('<div class="hero-kicker">Mystery Content Studio</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero-title">ครอปคลิป 9:16</div>', unsafe_allow_html=True)
+    if render_vertical_crop_tab:
+        render_vertical_crop_tab()
+    else:
+        st.info("หน้านี้ใช้ไฟล์ video_crop.py — ยังไม่พบในโฟลเดอร์โปรเจกต์นี้")
+    st.stop()
+if menu == "Auto Subtitle":
+    if render_auto_subtitle_page:
+        render_auto_subtitle_page()
+    else:
+        st.markdown('<div class="hero-kicker">Mystery Content Studio</div>', unsafe_allow_html=True)
+        st.markdown('<div class="hero-title">Auto Subtitle</div>', unsafe_allow_html=True)
+        st.info("หน้านี้ใช้ไฟล์ subtitles.py — ยังไม่พบในโฟลเดอร์โปรเจกต์นี้")
+    st.stop()
+
 st.markdown('<div class="hero-kicker">Mystery Content Studio</div>', unsafe_allow_html=True)
-st.markdown('<div class="hero-title">AI ค้นหาเรื่องลึกลับ</div>', unsafe_allow_html=True)
-st.markdown('<div class="hero-sub">เขียนสคริปต์ 30-60 วินาที พากย์เสียง และหาคลิปประกอบได้ในที่เดียว</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero-title">Mystery Content & B-Roll Workflow</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero-sub">สร้างสคริปต์ พากย์เสียง แล้วจับไทม์ไลน์หาคลิปสต็อกเป็นขั้นตอน</div>', unsafe_allow_html=True)
 
-if not api_key:
-    st.warning("กรุณาใส่ Gemini API Key ที่ Sidebar ด้านซ้ายก่อนเริ่มใช้งาน")
-else:
-    client = genai.Client(api_key=api_key)
+tab1, tab2, tab3 = st.tabs(
+    ["📝 1. สร้างสคริปต์ & เสียง", "⏱️ 2. ไทม์ไลน์และหาคลิปสต็อก", "📂 3. เรื่องที่เก็บไว้"]
+)
 
-    if st.button("🚀 ค้นหาเรื่องใหม่ (5 เรื่อง)", type="primary"):
-        with st.spinner("AI กำลังค้นหาข้อมูลและเขียนสคริปต์..."):
-            excluded_text = ", ".join(st.session_state.history) if st.session_state.history else "ไม่มี"
-            prompt = f"""
+with tab1:
+    st.subheader("ตั้งค่าระบบและสร้างเนื้อหาเรื่องใหม่")
+    col_a, col_b = st.columns([1, 2])
+    with col_a:
+        api_key, model_name, voice_id, eleven_key, eleven_voice = render_settings_panel()
+    with col_b:
+        st.info("กดค้นหาเรื่องใหม่ เพื่อได้สคริปต์ Hook / Context / Twist / Reveal สำหรับคลิปสั้น แล้วลองฟังเสียงพากย์ได้ในหน้านี้")
+        if not api_key:
+            st.warning("ใส่ Gemini API Key ก่อนเริ่มค้นหาเรื่อง")
+        elif st.button("🔍 ค้นหาเรื่องใหม่ (5 เรื่อง)", type="primary"):
+            try:
+                with st.spinner("AI กำลังค้นหาข้อมูลและเขียนสคริปต์..."):
+                    excluded_text = ", ".join(st.session_state.history) if st.session_state.history else "ไม่มี"
+                    client = genai.Client(api_key=api_key)
+                    prompt = f"""
 คุณเป็นนักสร้างคอนเทนต์แนวเรื่องลึกลับ จิตวิทยา และเรื่องแปลกทั่วโลก
 จงหาข้อมูลมาให้ 5 เรื่องใหม่
 ห้ามซ้ำกับรายการชื่อเรื่องเหล่านี้เด็ดขาด: [{excluded_text}]
@@ -699,24 +749,24 @@ else:
 
 สคริปต์รวมทุกส่วนแล้วพูดจบใน 30-60 วินาที ใช้ภาษาไทยที่เป็นธรรมชาติ
 """
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        thinking_config=types.ThinkingConfig(thinking_level="low"),
-                    ),
-                )
-                topics = normalize_topics(extract_json(response.text))
-                if len(topics) < 5:
-                    raise ValueError(f"ได้มา {len(topics)} เรื่อง ต้องการ 5 เรื่อง")
-                st.session_state.results = topics
-                st.success("ค้นหาข้อมูลสำเร็จ!")
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            thinking_config=types.ThinkingConfig(thinking_level="low"),
+                        ),
+                    )
+                    topics = normalize_topics(extract_json(response.text))
+                    if len(topics) < 5:
+                        raise ValueError(f"ได้มา {len(topics)} เรื่อง ต้องการ 5 เรื่อง")
+                    st.session_state.results = topics
+                st.success("สร้างสคริปต์สำเร็จ!")
             except Exception as e:
                 st.error(f"เกิดข้อผิดพลาด: {e}")
 
     if st.session_state.results:
+        st.markdown("---")
         st.subheader("เรื่องที่ค้นเจอ")
         results = list(st.session_state.results)
         for row_start in range(0, len(results), 2):
@@ -728,9 +778,37 @@ else:
                 with col:
                     render_card(results[index], ["yellow", "pink", "blue"][index % 3])
 
+with tab2:
+    st.subheader("🎵 อัปโหลดไฟล์เสียงพากย์เพื่อสร้างไทม์ไลน์ภาพประกอบ")
+    st.info("เลือกเรื่องจากแท็บ 1 หรือเรื่องที่เก็บไว้ แล้วแตกฉากหาคลิปประกอบได้ด้านล่าง")
+    saved_or_results = list(st.session_state.results) + [
+        {**item, "id": f"saved-{idx}"} for idx, item in enumerate(st.session_state.saved)
+    ]
+    if not saved_or_results:
+        st.caption("ยังไม่มีเรื่องให้จับไทม์ไลน์ สร้างเรื่องในแท็บ 1 ก่อน")
+    else:
+        labels = [item.get("title", "ไม่มีชื่อ") for item in saved_or_results]
+        picked = st.selectbox(
+            "เลือกเรื่อง",
+            list(range(len(labels))),
+            format_func=lambda idx: labels[idx],
+            key="timeline_story_pick",
+        )
+        topic = saved_or_results[picked]
+        render_broll_finder(
+            topic.get("id"),
+            topic.get("title", "script"),
+            normalize_script(topic.get("script")),
+            topic.get("broll") or topic.get("video_keywords"),
+            topic,
+        )
+
+with tab3:
+    st.subheader("จัดการประวัติและเรื่องที่เก็บไว้")
     saved_stories = st.session_state.saved
-    if saved_stories:
-        st.subheader("เรื่องที่เก็บไว้")
+    if not saved_stories:
+        st.info("ยังไม่มีเรื่องที่เก็บไว้ กดเก็บไว้ในแท็บสร้างสคริปต์ก่อน")
+    else:
         for index, topic in enumerate(reversed(saved_stories)):
             real_index = len(saved_stories) - 1 - index
             script = normalize_script(topic.get("script"))
