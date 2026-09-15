@@ -52,6 +52,11 @@ class AudioTimelineTests(unittest.TestCase):
         self.assertTrue(audio_timeline.looks_like_english(segments[0]["th"]))
         self.assertTrue(audio_timeline.looks_like_english(segments[0]["en"]))
 
+    def test_busy_error_detection(self):
+        err = RuntimeError("503 UNAVAILABLE. This model is currently experiencing high demand.")
+        self.assertTrue(audio_timeline.is_busy_error(err))
+        self.assertFalse(audio_timeline.is_busy_error(RuntimeError("invalid api key")))
+
 
 if __name__ == "__main__":
     unittest.main()

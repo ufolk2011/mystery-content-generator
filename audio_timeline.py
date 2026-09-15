@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 from urllib.parse import quote, quote_plus
 
 from google.genai import types
@@ -140,6 +141,72 @@ def normalize_segments(payload):
     return segments
 
 
+FALLBACK_MODELS = (
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
+)
+
+
+def model_choices(preferred=None):
+    ordered = []
+    for name in (preferred, *FALLBACK_MODELS):
+        if name and name not in ordered:
+            ordered.append(name)
+    return ordered
+
+
+def is_busy_error(err):
+    text = str(err).lower()
+    return any(
+        token in text
+        for token in (
+            "503",
+            "unavailable",
+            "high demand",
+            "overloaded",
+            "429",
+            "resource_exhausted",
+            "try again later",
+            "temporarily",
+        )
+    )
+
+
+def json_config(model_name):
+    kwargs = {"response_mime_type": "application/json"}
+    if "gemini-3" in str(model_name):
+        kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="low")
+    return types.GenerateContentConfig(**kwargs)
+
+
+def generate_content_resilient(client, preferred_model, contents):
+    last_err = None
+    for model in model_choices(preferred_model):
+        for attempt in range(3):
+            try:
+                return client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=json_config(model),
+                )
+            except Exception as err:
+                last_err = err
+                if is_busy_error(err) and attempt < 2:
+                    time.sleep(1.2 * (attempt + 1))
+                    continue
+                break
+    raise RuntimeError(
+        "โมเดล Gemini หนาแน่นชั่วคราว — กดปุ่มอีกครั้ง "
+        "หรือเปลี่ยนโมเดลเป็น gemini-2.5-flash / gemini-2.0-flash"
+    ) from last_err
+
+
 def timeline_prompt():
     return """
 ฟังไฟล์เสียงพากย์นี้ แล้วแตกเป็นไทม์ไลน์ตามช่วงเวลาที่พูดจริง
@@ -179,14 +246,7 @@ def fill_thai_translations(client, model_name, segments):
         "ช่อง thai ต้องเป็นตัวอักษรไทยเท่านั้น ห้ามตอบเป็นภาษาอังกฤษ\n"
         f"{json.dumps(pending, ensure_ascii=False)}"
     )
-    response = client.models.generate_content(
-        model=model_name,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            thinking_config=types.ThinkingConfig(thinking_level="low"),
-        ),
-    )
+    response = generate_content_resilient(client, model_name, prompt)
     payload = _extract_json(response.text)
     items = payload.get("items", payload) if isinstance(payload, dict) else payload
     if not isinstance(items, list):
@@ -208,16 +268,13 @@ def fill_thai_translations(client, model_name, segments):
 
 def transcribe_voice_timeline(client, model_name, audio_bytes, filename):
     mime_type = audio_mime_type(filename)
-    response = client.models.generate_content(
-        model=model_name,
-        contents=[
+    response = generate_content_resilient(
+        client,
+        model_name,
+        [
             types.Part.from_bytes(data=bytes(audio_bytes), mime_type=mime_type),
             timeline_prompt(),
         ],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            thinking_config=types.ThinkingConfig(thinking_level="low"),
-        ),
     )
     segments = normalize_segments(_extract_json(response.text))
     if not segments:
@@ -266,7 +323,7 @@ def render_audio_timeline_page(embed=False):
         st.session_state.api_key = api_key
     model_name = st.selectbox(
         "โมเดล",
-        ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"],
+        model_choices("gemini-2.5-flash"),
         key=f"{key_prefix}_timeline_model",
     )
 

@@ -261,7 +261,7 @@ def render_settings_panel():
 
     model_value = st.selectbox(
         "โมเดล",
-        ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"],
+        ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"],
         index=0,
         key="model_name_v2",
     )
@@ -858,7 +858,7 @@ with tab2:
         st.audio(uploaded_voice)
         st.caption(f"ไฟล์ที่เลือก: {uploaded_voice.name}")
         timeline_key = st.session_state.get("api_key") or os.environ.get("GEMINI_API_KEY", "")
-        timeline_model = st.session_state.get("model_name_v2") or "gemini-3.6-flash"
+        timeline_model = st.session_state.get("model_name_v2") or "gemini-2.5-flash"
         if not timeline_key:
             st.warning("ใส่ Gemini API Key ที่แท็บ 1 ก่อน เพื่อถอดเสียงตามวินาที")
         elif not transcribe_voice_timeline:
