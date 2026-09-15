@@ -157,7 +157,7 @@ def clip_search_links(keyword):
     ]
 
 
-def render_audio_timeline_page():
+def render_audio_timeline_page(embed=False):
     """Standalone page: upload voiceover → timestamped TH/EN → stock clips."""
     import streamlit as st
     from google import genai
@@ -165,33 +165,38 @@ def render_audio_timeline_page():
     if "voice_timeline" not in st.session_state:
         st.session_state.voice_timeline = []
 
-    st.markdown('<div class="hero-kicker">Mystery Content Studio</div>', unsafe_allow_html=True)
-    st.markdown('<div class="hero-title">ไทม์ไลน์เสียงพากย์</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="hero-sub">อัปโหลดไฟล์เสียง ดูว่าวินาทีนี้พูดอะไร แปลไทย/อังกฤษ แล้วหาคลิปประกอบ</div>',
-        unsafe_allow_html=True,
-    )
+    key_prefix = "embed" if embed else "standalone"
+    if embed:
+        st.subheader("🎵 อัปโหลดไฟล์เสียงพากย์เพื่อดูว่าวินาทีนี้พูดอะไร")
+        st.write("แปลไทย/อังกฤษ แล้วหาคลิปประกอบให้แต่ละช่วงเวลา")
+    else:
+        st.markdown('<div class="hero-kicker">Mystery Content Studio</div>', unsafe_allow_html=True)
+        st.markdown('<div class="hero-title">ไทม์ไลน์เสียงพากย์</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="hero-sub">อัปโหลดไฟล์เสียง ดูว่าวินาทีนี้พูดอะไร แปลไทย/อังกฤษ แล้วหาคลิปประกอบ</div>',
+            unsafe_allow_html=True,
+        )
 
     api_key = st.text_input(
         "Gemini API Key",
         value=st.session_state.get("api_key") or os.environ.get("GEMINI_API_KEY", ""),
         placeholder="วางคีย์ที่นี่",
         autocomplete="off",
-        key="timeline_page_gemini_key",
+        key=f"{key_prefix}_timeline_gemini_key",
     )
     if api_key:
         st.session_state.api_key = api_key
     model_name = st.selectbox(
         "โมเดล",
         ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"],
-        key="timeline_page_model",
+        key=f"{key_prefix}_timeline_model",
     )
 
     st.subheader("1. อัปโหลดไฟล์เสียงพากย์")
     uploaded_voice = st.file_uploader(
         "เลือกไฟล์เสียง (.mp3 / .wav / .m4a)",
         type=["mp3", "wav", "m4a", "aac", "ogg"],
-        key="standalone_voice_upload",
+        key=f"{key_prefix}_voice_upload",
     )
     if uploaded_voice is None:
         st.info("ลากไฟล์เสียงมาวางที่นี่ หรือกด Browse files")
@@ -212,7 +217,7 @@ def render_audio_timeline_page():
         "ถอดเสียงตามวินาที แปลไทย/อังกฤษ และหาคลิปประกอบ",
         type="primary",
         use_container_width=True,
-        key="standalone_transcribe_voice",
+        key=f"{key_prefix}_transcribe_voice",
     ):
         try:
             with st.spinner("กำลังฟังเสียง แยกช่วงเวลา และหาคลิปประกอบ..."):
@@ -252,5 +257,5 @@ def render_audio_timeline_page():
                     name,
                     url,
                     use_container_width=True,
-                    key=f"standalone-tl-{index}-{k_idx}-{name}",
+                    key=f"{key_prefix}-tl-{index}-{k_idx}-{name}",
                 )

