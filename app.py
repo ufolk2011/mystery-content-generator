@@ -11,7 +11,6 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from tts import safe_filename, spoken_script, synthesize
-from lip_sync import render_lip_sync_page
 
 try:
     from video_crop import render_vertical_crop_tab
@@ -230,7 +229,7 @@ st.markdown(
 st.sidebar.markdown("**เมนู**")
 menu = st.sidebar.radio(
     "เมนู",
-    ["ค้นหาเรื่อง", "✂️ ครอปคลิป 9:16", "Auto Subtitle", "ลิปซิงค์คาแรกเตอร์"],
+    ["ค้นหาเรื่อง", "✂️ ครอปคลิป 9:16", "Auto Subtitle"],
     label_visibility="collapsed",
     key="menu",
 )
@@ -569,9 +568,10 @@ def store_broll(audio_key, broll, topic=None):
     ]
 
 
-def render_broll_finder(audio_key, title, script, existing=None, topic=None):
+def render_broll_finder(audio_key, title, script, existing=None, topic=None, ui_key=None):
     broll = st.session_state.broll.get(audio_key) or normalize_keywords(existing)
-    if st.button("🎬 ค้นหาคลิปประกอบ", key=f"broll-{audio_key}", use_container_width=True):
+    widget_key = ui_key or audio_key
+    if st.button("🎬 ค้นหาคลิปประกอบ", key=f"broll-{widget_key}", use_container_width=True):
         if not has_broll(broll):
             if not api_key:
                 st.error("ใส่ Gemini API Key ก่อนเพื่อให้ AI หาคีย์เวิร์ดคลิป")
@@ -648,7 +648,14 @@ def render_card(topic, tone="yellow"):
     render_script_sections(topic["script"])
     copy_script_button(script_copy_text(topic["title"], topic["script"]), f"copy-{topic['id']}")
     render_tts_controls(topic["id"], topic["title"], topic["script"])
-    render_broll_finder(topic["id"], topic["title"], topic["script"], topic.get("broll"), topic)
+    render_broll_finder(
+        topic["id"],
+        topic["title"],
+        topic["script"],
+        topic.get("broll"),
+        topic,
+        ui_key=f"card-{topic['id']}",
+    )
     keep_col, drop_col = st.columns(2)
     if keep_col.button("💾 เก็บไว้", key=f"keep-{topic['id']}", type="primary", use_container_width=True):
         add_history_title(topic["title"])
@@ -687,9 +694,6 @@ if st.session_state.history:
         st.session_state.history = []
         st.rerun()
 
-if menu == "ลิปซิงค์คาแรกเตอร์":
-    render_lip_sync_page()
-    st.stop()
 if menu in ("ครอปคลิป 9:16", "✂️ ครอปคลิป 9:16"):
     st.markdown('<div class="hero-kicker">Mystery Content Studio</div>', unsafe_allow_html=True)
     st.markdown('<div class="hero-title">ครอปคลิป 9:16</div>', unsafe_allow_html=True)
@@ -801,6 +805,7 @@ with tab2:
             normalize_script(topic.get("script")),
             topic.get("broll") or topic.get("video_keywords"),
             topic,
+            ui_key=f"timeline-{topic.get('id')}",
         )
 
 with tab3:
@@ -819,12 +824,17 @@ with tab3:
                     script_copy_text(topic.get("title", ""), script),
                     f"copy-saved-{real_index}",
                 )
-                render_tts_controls(f"saved-{real_index}", topic.get("title", "script"), script)
+                render_tts_controls(
+                    f"saved-{real_index}",
+                    topic.get("title", "script"),
+                    script,
+                )
                 render_broll_finder(
                     f"saved-{real_index}",
                     topic.get("title", "script"),
                     script,
                     topic.get("broll") or topic.get("video_keywords"),
+                    ui_key=f"library-{real_index}",
                 )
                 if st.button("ลบออกจากคลัง", key=f"unsave-{real_index}"):
                     saved_stories.pop(real_index)
