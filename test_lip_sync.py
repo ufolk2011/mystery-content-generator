@@ -90,5 +90,46 @@ class LipSyncPipelineTests(unittest.TestCase):
         self.assertEqual(chosen.name, "result.mp4")
 
 
+class InstallLipSyncMenuTests(unittest.TestCase):
+    def test_patches_studio_crop_subtitle_keys(self):
+        import install_lipsync
+
+        sample = '''
+from tts import synthesize
+app_page = st.sidebar.radio(
+    "เมนู",
+    ["studio", "crop", "subtitle"],
+    format_func=lambda key: {
+        "studio": "ค้นหาเรื่อง",
+        "crop": "✂️ ครอปคลิป 9:16",
+        "subtitle": "Auto Subtitle",
+    }[key],
+)
+if app_page == "crop":
+    render_vertical_crop_tab()
+'''
+        updated = install_lipsync.patch_app_text(sample)
+        self.assertIn("from lip_sync import render_lip_sync_page", updated)
+        self.assertIn('"lipsync"', updated)
+        self.assertIn("ลิปซิงค์คาแรกเตอร์", updated)
+        self.assertIn('if app_page == "lipsync":', updated)
+        self.assertIn("render_lip_sync_page()", updated)
+
+    def test_patches_thai_radio_with_scissors(self):
+        import install_lipsync
+
+        sample = '''
+menu = st.sidebar.radio(
+    "เมนู",
+    ["ค้นหาเรื่อง", "✂️ ครอปคลิป 9:16", "Auto Subtitle"],
+)
+if menu == "Auto Subtitle":
+    render_auto_subtitle_page()
+'''
+        updated = install_lipsync.patch_app_text(sample)
+        self.assertIn("ลิปซิงค์คาแรกเตอร์", updated)
+        self.assertIn('if menu == "ลิปซิงค์คาแรกเตอร์":', updated)
+
+
 if __name__ == "__main__":
     unittest.main()
