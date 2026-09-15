@@ -12,6 +12,10 @@ import streamlit.components.v1 as components
 
 from tts import safe_filename, spoken_script, synthesize
 from lip_sync import render_lip_sync_page
+from audio_timeline import (
+    format_clock,
+    transcribe_voice_timeline,
+)
 
 try:
     from video_crop import render_vertical_crop_tab
@@ -535,6 +539,41 @@ def copy_script_button(text, key):
     )
 
 
+def render_voice_segments(segments, ui_key="voice-tl"):
+    for index, seg in enumerate(segments):
+        start_label = format_clock(seg["start"])
+        end_label = format_clock(seg["end"])
+        st.markdown(
+            f"""
+            <div class="script-block" style="--accent:#38bdf8">
+              <div class="script-label">{start_label} – {end_label}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        thai_col, eng_col = st.columns(2)
+        with thai_col:
+            st.markdown("**ไทย**")
+            st.write(seg.get("th") or "—")
+        with eng_col:
+            st.markdown("**English**")
+            st.write(seg.get("en") or "—")
+        keywords = seg.get("keywords") or []
+        if not keywords:
+            continue
+        st.caption("หาพาก / คลิปประกอบจากช่วงนี้")
+        for k_idx, keyword in enumerate(keywords[:3]):
+            st.caption(f"คีย์เวิร์ด: `{keyword}`")
+            cols = st.columns(4)
+            for col, (name, url) in zip(cols, clip_search_links(keyword)):
+                col.link_button(
+                    name,
+                    url,
+                    use_container_width=True,
+                    key=f"{ui_key}-{index}-{k_idx}-{name}",
+                )
+
+
 def render_script_sections(script):
     for key, label, color in SCRIPT_SECTIONS:
         st.markdown(
@@ -602,7 +641,7 @@ def render_broll_finder(audio_key, title, script, existing=None, topic=None, ui_
             st.caption(f"คีย์เวิร์ด: `{keyword}`")
             cols = st.columns(4)
             for col, (name, url) in zip(cols, clip_search_links(keyword)):
-                col.link_button(name, url, use_container_width=True)
+                col.link_button(name, url, use_container_width=True, key=f"clip-{widget_key}-{key}-{idx}-{name}")
 
 
 def render_tts_controls(audio_key, title, script):
@@ -684,6 +723,8 @@ if "broll" not in st.session_state:
     st.session_state.broll = {}
 if "show_broll" not in st.session_state:
     st.session_state.show_broll = {}
+if "voice_timeline" not in st.session_state:
+    st.session_state.voice_timeline = []
 
 st.sidebar.markdown(f"**เรื่องที่เคยเก็บไว้**  {len(st.session_state.history)} เรื่อง")
 if st.session_state.history:
@@ -788,42 +829,81 @@ with tab1:
 
 with tab2:
     st.subheader("🎵 อัปโหลดไฟล์เสียงพากย์เพื่อสร้างไทม์ไลน์ภาพประกอบ")
+    st.write(
+        "อัปโหลดเสียงพากย์ แล้วระบบจะบอกว่าวินาทีนี้พูดอะไร "
+        "แปลไทย/อังกฤษ และหาคลิปประกอบให้แต่ละช่วง"
+    )
     uploaded_voice = st.file_uploader(
         "เลือกไฟล์เสียงพากย์ (.mp3 / .wav / .m4a)",
         type=["mp3", "wav", "m4a", "aac", "ogg"],
         key="timeline_voice_upload",
     )
     if uploaded_voice is not None:
+        if st.session_state.get("voice_tl_source") != uploaded_voice.name:
+            st.session_state.voice_timeline = []
+            st.session_state.voice_tl_source = uploaded_voice.name
         st.audio(uploaded_voice)
         st.caption(f"ไฟล์ที่เลือก: {uploaded_voice.name}")
-        st.session_state.timeline_uploaded_audio_name = uploaded_voice.name
+        timeline_key = st.session_state.get("api_key") or os.environ.get("GEMINI_API_KEY", "")
+        timeline_model = st.session_state.get("model_name_v2") or "gemini-3.6-flash"
+        if not timeline_key:
+            st.warning("ใส่ Gemini API Key ที่แท็บ 1 ก่อน เพื่อถอดเสียงตามวินาที")
+        elif st.button(
+            "ถอดเสียงตามวินาที แปลไทย/อังกฤษ และหาคลิปประกอบ",
+            type="primary",
+            use_container_width=True,
+            key="transcribe_voice_timeline",
+        ):
+            try:
+                with st.spinner("กำลังฟังเสียง แยกช่วงเวลา และหาคลิปประกอบ..."):
+                    audio_bytes = bytes(uploaded_voice.getbuffer())
+                    client = genai.Client(api_key=timeline_key)
+                    st.session_state.voice_timeline = transcribe_voice_timeline(
+                        client,
+                        timeline_model,
+                        audio_bytes,
+                        uploaded_voice.name,
+                    )
+                try:
+                    uploaded_voice.seek(0)
+                except Exception:
+                    pass
+                st.success(f"ได้ {len(st.session_state.voice_timeline)} ช่วงจากไฟล์เสียง")
+            except Exception as err:
+                st.error(f"ถอดเสียงไม่สำเร็จ: {err}")
     else:
         st.caption("ยังไม่มีไฟล์เสียง — อัปโหลด .mp3 / .wav / .m4a ได้เลยด้านบน")
 
+    if st.session_state.voice_timeline:
+        st.markdown("---")
+        st.subheader("ไทม์ไลน์จากไฟล์เสียง")
+        render_voice_segments(st.session_state.voice_timeline, ui_key="voice-tl")
+
     st.markdown("---")
-    st.info("เลือกเรื่องจากแท็บ 1 หรือเรื่องที่เก็บไว้ แล้วแตกฉากหาคลิปประกอบได้ด้านล่าง")
-    saved_or_results = list(st.session_state.results) + [
-        {**item, "id": f"saved-{idx}"} for idx, item in enumerate(st.session_state.saved)
-    ]
-    if not saved_or_results:
-        st.caption("ยังไม่มีเรื่องให้จับไทม์ไลน์ สร้างเรื่องในแท็บ 1 ก่อน")
-    else:
-        labels = [item.get("title", "ไม่มีชื่อ") for item in saved_or_results]
-        picked = st.selectbox(
-            "เลือกเรื่อง",
-            list(range(len(labels))),
-            format_func=lambda idx: labels[idx],
-            key="timeline_story_pick",
-        )
-        topic = saved_or_results[picked]
-        render_broll_finder(
-            topic.get("id"),
-            topic.get("title", "script"),
-            normalize_script(topic.get("script")),
-            topic.get("broll") or topic.get("video_keywords"),
-            topic,
-            ui_key=f"timeline-{topic.get('id')}",
-        )
+    with st.expander("หรือเลือกเรื่องจากแท็บ 1 / คลัง แล้วหาคลิปจากสคริปต์"):
+        st.info("ใช้เมื่อยังไม่อัปโหลดไฟล์เสียง แต่มีเรื่องจากแท็บสร้างสคริปต์")
+        saved_or_results = list(st.session_state.results) + [
+            {**item, "id": f"saved-{idx}"} for idx, item in enumerate(st.session_state.saved)
+        ]
+        if not saved_or_results:
+            st.caption("ยังไม่มีเรื่องให้จับไทม์ไลน์ สร้างเรื่องในแท็บ 1 ก่อน")
+        else:
+            labels = [item.get("title", "ไม่มีชื่อ") for item in saved_or_results]
+            picked = st.selectbox(
+                "เลือกเรื่อง",
+                list(range(len(labels))),
+                format_func=lambda idx: labels[idx],
+                key="timeline_story_pick",
+            )
+            topic = saved_or_results[picked]
+            render_broll_finder(
+                topic.get("id"),
+                topic.get("title", "script"),
+                normalize_script(topic.get("script")),
+                topic.get("broll") or topic.get("video_keywords"),
+                topic,
+                ui_key=f"timeline-{topic.get('id')}",
+            )
 
 with tab3:
     st.subheader("จัดการประวัติและเรื่องที่เก็บไว้")
