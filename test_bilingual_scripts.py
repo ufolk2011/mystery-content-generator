@@ -1,6 +1,9 @@
 import unittest
 
 from script_utils import (
+    apply_english_payload,
+    bilingual_fields,
+    has_english_script,
     has_script,
     looks_english,
     normalize_script,
@@ -85,7 +88,36 @@ class BilingualScriptTests(unittest.TestCase):
         self.assertIn("English hook", text)
         self.assertIn("--- English ---", text)
 
-    def test_copy_english_only(self):
+    def test_apply_english_payload(self):
+        topic = apply_english_payload(
+            {"title": "แห่งไอซ์แลนด์", "script": {"hook": "ฮุคไทย"}},
+            {
+                "title_en": "The Icelandic Necropants",
+                "summary_en": "A grim folklore tale.",
+                "script_en": {
+                    "hook": "Would you trade a human skin for a fortune?",
+                    "context": "In 17th century Iceland the legend spread quietly",
+                    "twist": "But the museum piece is not original",
+                    "reveal": "Historians say it is a replica",
+                },
+            },
+        )
+        self.assertTrue(has_english_script(topic))
+        self.assertEqual(topic["title_en"], "The Icelandic Necropants")
+
+    def test_saved_thai_story_has_no_english_until_translated(self):
+        topic = bilingual_fields(
+            {
+                "title": "เงาหลอนแห่งเทือกเขาบร็อคเคน",
+                "script": {
+                    "hook": "ถ้าคุณเดินขึ้นเขาคนเดียวกลางหมอก",
+                    "context": "บนยอดเขาบร็อคเคน",
+                    "twist": "แต่เมื่อมีคนใจกล้าเดินเข้าไป",
+                    "reveal": "แท้จริงแล้วมันคือปรากฏการณ์ทางแสง",
+                },
+            }
+        )
+        self.assertFalse(has_english_script(topic))
         text = script_copy_text(
             "แห่งไอซ์แลนด์",
             {"hook": "ฮุคไทย", "context": "", "twist": "", "reveal": ""},

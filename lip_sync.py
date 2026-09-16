@@ -1,455 +1,300 @@
-import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
-
-VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv"}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 
 
 class LipSyncError(RuntimeError):
-    """Raised when a lip-sync pipeline step cannot run."""
+    """Raised when the still+audio clip cannot be assembled."""
 
 
-def _env_path(name, default=""):
-    value = (os.environ.get(name) or default or "").strip().strip('"').strip("'")
-    return Path(value).expanduser() if value else None
+def _import_moviepy():
+    try:
+        from moviepy import AudioFileClip, ImageClip
+
+        return ImageClip, AudioFileClip
+    except ImportError:
+        from moviepy.editor import AudioFileClip, ImageClip
+
+        return ImageClip, AudioFileClip
 
 
-def _python_bin():
-    return os.environ.get("LIPSYNC_PYTHON") or os.environ.get("PYTHON") or shutil.which("python") or "python"
-
-
-def require_file(path, kind="ไฟล์"):
-    resolved = Path(path).expanduser().resolve()
-    if not resolved.is_file():
-        raise LipSyncError(f"ไม่พบ{kind}: {path}")
-    return resolved
-
-
-def newest_video(folder, exclude_substr="_concat"):
-    folder = Path(folder)
-    if not folder.exists():
-        return None
-    videos = [item for item in folder.rglob("*") if item.suffix.lower() in VIDEO_SUFFIXES]
-    if not videos:
-        return None
-    preferred = [item for item in videos if exclude_substr not in item.name]
-    pool = preferred or videos
-    return max(pool, key=lambda item: item.stat().st_mtime)
-
-
-def run_command(cmd, cwd=None):
-    if not cmd:
-        raise LipSyncError("ไม่มีคำสั่งให้รัน")
+def _pip_install(packages):
     completed = subprocess.run(
-        [str(part) for part in cmd],
-        cwd=str(cwd) if cwd else None,
+        [sys.executable, "-m", "pip", "install", *packages],
         check=False,
         capture_output=True,
         text=True,
     )
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "").strip()
-        raise LipSyncError(
-            f"คำสั่งล้มเหลว ({completed.returncode}): {' '.join(str(part) for part in cmd)}\n{detail}"
-        )
-    return completed
+    return completed.returncode == 0
 
 
-def ffmpeg_bin():
-    return os.environ.get("FFMPEG_BIN") or shutil.which("ffmpeg")
-
-
-def mux_audio(video_path, audio_path, output_path):
-    ffmpeg = ffmpeg_bin()
-    if not ffmpeg:
-        shutil.copy2(video_path, output_path)
-        return Path(output_path)
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-i",
-        str(video_path),
-        "-i",
-        str(audio_path),
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a:0",
-        "-c:v",
-        "copy",
-        "-c:a",
-        "aac",
-        "-shortest",
-        str(output_path),
-    ]
+def _load_moviepy(install_if_missing=True):
     try:
-        run_command(cmd)
-    except LipSyncError:
-        cmd[cmd.index("-c:v") + 1] = "libx264"
-        run_command(cmd)
-    return Path(output_path)
+        return _import_moviepy()
+    except ImportError:
+        pass
+    if install_if_missing and _pip_install(["moviepy>=2.0.0", "imageio-ffmpeg>=0.5.1"]):
+        try:
+            return _import_moviepy()
+        except ImportError:
+            pass
+    return None
 
 
-def sadtalker_command(audio_path, template_face, result_dir, extra_args=None):
-    home = _env_path("SADTALKER_HOME")
-    script = _env_path("SADTALKER_SCRIPT")
-    if script is None and home:
-        for name in ("inference.py", os.path.join("src", "inference.py")):
-            candidate = home / name
-            if candidate.is_file():
-                script = candidate
-                break
-    if script is None or not script.is_file():
-        return None
-    cmd = [
-        _python_bin(),
-        str(script),
-        "--driven_audio",
-        str(audio_path),
-        "--source_image",
-        str(template_face),
-        "--result_dir",
-        str(result_dir),
-        "--still",
-        "--preprocess",
-        os.environ.get("SADTALKER_PREPROCESS", "full"),
-    ]
-    if extra_args:
-        cmd.extend(extra_args)
-    return cmd, home if home and home.is_dir() else script.parent
+def _with_duration(clip, duration):
+    if hasattr(clip, "with_duration"):
+        return clip.with_duration(duration)
+    return clip.set_duration(duration)
 
 
-def wav2lip_command(audio_path, template_face, output_video, extra_args=None):
-    home = _env_path("WAV2LIP_HOME")
-    if home is None or not home.is_dir():
-        return None
-    script = home / "inference.py"
-    checkpoint = _env_path("WAV2LIP_CHECKPOINT") or home / "checkpoints" / "wav2lip_gan.pth"
-    if not script.is_file():
-        return None
-    cmd = [
-        _python_bin(),
-        str(script),
-        "--checkpoint_path",
-        str(checkpoint),
-        "--face",
-        str(template_face),
-        "--audio",
-        str(audio_path),
-        "--outfile",
-        str(output_video),
-    ]
-    if extra_args:
-        cmd.extend(extra_args)
-    return cmd, home
+def _with_audio(clip, audio):
+    if hasattr(clip, "with_audio"):
+        return clip.with_audio(audio)
+    return clip.set_audio(audio)
 
 
-def live_portrait_command(source_image, driving_video, output_dir, extra_args=None):
-    home = _env_path("LIVEPORTRAIT_HOME")
-    script = _env_path("LIVEPORTRAIT_SCRIPT")
-    if script is None and home:
-        candidate = home / "inference.py"
-        if candidate.is_file():
-            script = candidate
-    if script is None or not script.is_file():
-        return None
-    cmd = [
-        _python_bin(),
-        str(script),
-        "-s",
-        str(source_image),
-        "-d",
-        str(driving_video),
-        "-o",
-        str(output_dir),
-        "--flag_crop_driving_video",
-        "--animation_region",
-        os.environ.get("LIVEPORTRAIT_REGION", "all"),
-    ]
-    if extra_args:
-        cmd.extend(extra_args)
-    return cmd, home if home and home.is_dir() else script.parent
+def _resized(clip, **kwargs):
+    if hasattr(clip, "resized"):
+        return clip.resized(**kwargs)
+    return clip.resize(**kwargs)
 
 
-def describe_setup():
-    tools = {
-        "ffmpeg": bool(ffmpeg_bin()),
-        "sadtalker": sadtalker_command("a.wav", "face.jpg", "out") is not None,
-        "wav2lip": wav2lip_command("a.wav", "face.jpg", "out.mp4") is not None,
-        "liveportrait": live_portrait_command("src.jpg", "drive.mp4", "out") is not None,
-        "template_face": bool(_env_path("LIPSYNC_TEMPLATE_FACE") and _env_path("LIPSYNC_TEMPLATE_FACE").is_file()),
-    }
-    return tools
+def ffmpeg_exe():
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        if _pip_install(["imageio-ffmpeg>=0.5.1"]):
+            try:
+                import imageio_ffmpeg
+
+                return imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception:
+                pass
+    raise LipSyncError(
+        "ไม่พบเครื่องมือตัดต่อวิดีโอ — ปิดแล้วเปิด run.bat ใหม่ "
+        "หรือรัน `.venv\\Scripts\\python.exe -m pip install moviepy imageio-ffmpeg`"
+    )
 
 
-def generate_driving_video(audio_path, template_face_path, output_dir, dry_run=False):
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    target = output_dir / "driving_face.mp4"
-    sadtalker = sadtalker_command(audio_path, template_face_path, output_dir / "sadtalker")
-    wav2lip = wav2lip_command(audio_path, template_face_path, target)
-    chosen = sadtalker or wav2lip
-    if chosen is None:
-        raise LipSyncError(
-            "ยังไม่พบ SadTalker หรือ Wav2Lip — ตั้งค่า SADTALKER_HOME หรือ WAV2LIP_HOME "
-            "หรืออัปโหลด Driving Video พร้อมใช้เพื่อข้ามขั้นตอนนี้"
+def _mux_with_moviepy(image_path, audio_path, output_path, fps, max_width, ImageClip, AudioFileClip):
+    audio = None
+    video = None
+    try:
+        audio = AudioFileClip(str(audio_path))
+        duration = float(audio.duration or 0)
+        if duration <= 0:
+            raise LipSyncError("ไฟล์เสียงว่างเปล่า")
+        video = ImageClip(str(image_path))
+        width, height = video.size
+        if width > max_width:
+            video = _resized(video, width=max_width)
+            width, height = video.size
+        even_w = width - (width % 2)
+        even_h = height - (height % 2)
+        if even_w < 2 or even_h < 2:
+            raise LipSyncError("รูปเล็กเกินไปสำหรับเข้ารหัสวิดีโอ")
+        if (even_w, even_h) != (width, height):
+            video = _resized(video, new_size=(even_w, even_h))
+        video = _with_duration(video, duration)
+        video = _with_audio(video, audio)
+        video.write_videofile(
+            str(output_path),
+            fps=int(fps),
+            codec="libx264",
+            audio_codec="aac",
+            logger=None,
         )
-    cmd, cwd = chosen
-    if dry_run:
-        return {"command": cmd, "cwd": str(cwd), "output": str(target)}
-    (output_dir / "sadtalker").mkdir(parents=True, exist_ok=True)
-    before = {item.resolve() for item in output_dir.rglob("*.mp4")}
-    run_command(cmd, cwd=cwd)
-    produced = newest_video(output_dir)
-    if produced is not None and produced.resolve() in before and produced.resolve() != target.resolve():
-        candidates = [item for item in output_dir.rglob("*.mp4") if item.resolve() not in before]
-        produced = max(candidates, key=lambda item: item.stat().st_mtime) if candidates else produced
-    if produced is None:
-        raise LipSyncError("โมเดล Audio-to-Video รันจบแล้ว แต่ไม่พบไฟล์ .mp4")
-    if produced.resolve() != target.resolve():
-        shutil.copy2(produced, target)
-    return target
+    finally:
+        for clip in (video, audio):
+            if clip is not None:
+                try:
+                    clip.close()
+                except Exception:
+                    pass
 
 
-def generate_live_portrait(source_image_path, driving_video_path, output_dir, dry_run=False):
-    output_dir = Path(output_dir)
-    portrait_dir = output_dir / "liveportrait"
-    portrait_dir.mkdir(parents=True, exist_ok=True)
-    configured = live_portrait_command(source_image_path, driving_video_path, portrait_dir)
-    if configured is None:
-        raise LipSyncError(
-            "ยังไม่พบ LivePortrait — ตั้งค่า LIVEPORTRAIT_HOME ให้ชี้ไปที่โฟลเดอร์ที่ clone ไว้ "
-            "(ต้องมีไฟล์ inference.py)"
-        )
-    cmd, cwd = configured
-    if dry_run:
-        return {"command": cmd, "cwd": str(cwd), "output_dir": str(portrait_dir)}
-    before = {item.resolve() for item in portrait_dir.rglob("*.mp4")}
-    run_command(cmd, cwd=cwd)
-    produced = newest_video(portrait_dir)
-    if produced is None or produced.resolve() in before:
-        candidates = [
-            item for item in portrait_dir.rglob("*.mp4") if item.resolve() not in before
-        ]
-        produced = max(candidates, key=lambda item: item.stat().st_mtime) if candidates else produced
-    if produced is None:
-        raise LipSyncError("LivePortrait รันจบแล้ว แต่ไม่พบไฟล์วิดีโอผลลัพธ์")
-    return produced
+def _mux_with_ffmpeg(image_path, audio_path, output_path, fps):
+    ffmpeg = ffmpeg_exe()
+    completed = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-loop",
+            "1",
+            "-framerate",
+            str(int(fps)),
+            "-i",
+            str(image_path),
+            "-i",
+            str(audio_path),
+            "-vf",
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-c:v",
+            "libx264",
+            "-tune",
+            "stillimage",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ],
+        check=False,
+        capture_output=True,
+    )
+    if completed.returncode != 0 or not output_path.is_file():
+        detail = (completed.stderr or b"").decode("utf-8", errors="ignore")[-400:]
+        raise LipSyncError(f"รวมคลิปไม่สำเร็จ\n{detail}")
 
 
-def generate_lip_sync_pipeline(
-    source_image_path,
-    driving_audio_path=None,
-    output_dir="output",
-    template_face_path=None,
-    driving_video_path=None,
-    dry_run=False,
+def make_lip_sync_clip(
+    image_path,
+    audio_path,
+    output_path="output/lip_sync.mp4",
+    fps=24,
+    max_width=720,
+    install_if_missing=True,
 ):
-    """Audio → talking-face driving video → LivePortrait on the mascot still.
+    """Mux a mascot still with audio. Uses moviepy when available, otherwise ffmpeg."""
+    image_path = Path(image_path)
+    audio_path = Path(audio_path)
+    output_path = Path(output_path)
+    if image_path.suffix.lower() not in IMAGE_SUFFIXES:
+        raise LipSyncError("รูปต้องเป็น .jpg / .png")
+    if audio_path.suffix.lower() not in AUDIO_SUFFIXES:
+        raise LipSyncError("เสียงต้องเป็น .mp3 / .wav / .m4a")
+    if not image_path.is_file():
+        raise LipSyncError(f"ไม่พบรูป: {image_path}")
+    if not audio_path.is_file():
+        raise LipSyncError(f"ไม่พบไฟล์เสียง: {audio_path}")
 
-    Step 1 uses SadTalker (preferred) or Wav2Lip when a talking-face template is
-    available. Pass an existing driving_video_path to skip that step.
-    Step 2 always runs LivePortrait with the real character still.
-    """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    source_image = require_file(source_image_path, "รูปคาแรกเตอร์")
-    if source_image.suffix.lower() not in IMAGE_SUFFIXES:
-        raise LipSyncError("รูปต้นทางต้องเป็น .jpg / .png / .webp")
-
-    audio_path = None
-    if driving_audio_path:
-        audio_path = require_file(driving_audio_path, "ไฟล์เสียงพากย์")
-        if audio_path.suffix.lower() not in AUDIO_SUFFIXES:
-            raise LipSyncError("ไฟล์เสียงต้องเป็น .mp3 / .wav / .m4a")
-
-    driving_video = None
-    if driving_video_path:
-        driving_video = require_file(driving_video_path, "Driving Video")
-
-    template_face = template_face_path or _env_path("LIPSYNC_TEMPLATE_FACE")
-    if template_face:
-        template_face = require_file(template_face, "รูปหน้าเทมเพลต")
-
-    plan = {"steps": []}
-    if driving_video is None:
-        if audio_path is None:
-            raise LipSyncError("ต้องมีไฟล์เสียงพากย์ หรือ Driving Video อย่างน้อยอย่างใดอย่างหนึ่ง")
-        if template_face is None:
-            raise LipSyncError(
-                "ขั้นตอนสร้าง Driving Video ต้องมีรูปหน้าเทมเพลต (template_face) "
-                "เช่น ใบหน้าตรงกล้องสำหรับ SadTalker / Wav2Lip"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    loaded = _load_moviepy(install_if_missing=install_if_missing)
+    try:
+        if loaded is not None:
+            ImageClip, AudioFileClip = loaded
+            _mux_with_moviepy(
+                image_path,
+                audio_path,
+                output_path,
+                fps,
+                max_width,
+                ImageClip,
+                AudioFileClip,
             )
-        print("--- [1/2] กำลังแปลงไฟล์เสียงเป็น Driving Video ---")
-        if dry_run:
-            plan["steps"].append(
-                generate_driving_video(audio_path, template_face, output_dir, dry_run=True)
-            )
-            driving_video = output_dir / "driving_face.mp4"
         else:
-            driving_video = generate_driving_video(audio_path, template_face, output_dir)
-    else:
-        copied = output_dir / "driving_face.mp4"
-        if not dry_run:
-            shutil.copy2(driving_video, copied)
-            driving_video = copied
-        print("--- [1/2] ใช้ Driving Video ที่อัปโหลดแล้ว ข้าม Audio-to-Video ---")
+            _mux_with_ffmpeg(image_path, audio_path, output_path, fps)
+    except LipSyncError:
+        raise
+    except Exception as err:
+        raise LipSyncError(f"รวมคลิปไม่สำเร็จ: {err}") from err
 
-    print("--- [2/2] กำลังรัน LivePortrait เพื่อสวมหน้าคาแรกเตอร์จริง ---")
-    final_path = output_dir / "final_mascot_output.mp4"
-    if dry_run:
-        plan["steps"].append(
-            generate_live_portrait(source_image, driving_video, output_dir, dry_run=True)
+    if not output_path.is_file():
+        raise LipSyncError("รวมคลิปไม่สำเร็จ")
+    return str(output_path)
+
+
+def _render_mascot_clip_form():
+    import streamlit as st
+
+    st.subheader("ลิปซิงค์มาสคอต")
+    st.write(
+        "อัปโหลดรูปมาสคอตกับไฟล์เสียง แล้วรวมเป็นวิดีโอทันที "
+        "ไม่ต้องโหลดโมเดล AI"
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        image_file = st.file_uploader(
+            "1. รูปมาสคอต (.jpg / .png)",
+            type=["jpg", "jpeg", "png"],
+            key="lip_sync_image",
         )
-        plan["output"] = str(final_path)
-        return plan
+        if image_file is not None:
+            try:
+                st.image(image_file, caption="รูปมาสคอต", use_container_width=True)
+                image_file.seek(0)
+            except Exception:
+                st.caption(image_file.name)
+    with col2:
+        audio_file = st.file_uploader(
+            "2. ไฟล์เสียงพากย์ (.mp3 / .wav / .m4a)",
+            type=["mp3", "wav", "m4a"],
+            key="lip_sync_audio",
+        )
+        if audio_file is not None:
+            st.audio(audio_file)
+            try:
+                audio_file.seek(0)
+            except Exception:
+                pass
 
-    portrait = generate_live_portrait(source_image, driving_video, output_dir)
-    if audio_path and ffmpeg_bin():
-        mux_audio(portrait, audio_path, final_path)
-    else:
-        shutil.copy2(portrait, final_path)
-    print(f"✨ สำเร็จ! เซฟวิดีโอไว้ที่: {final_path}")
-    return str(final_path)
-
-
-def _save_upload(upload, folder, prefix):
-    folder = Path(folder)
-    folder.mkdir(parents=True, exist_ok=True)
-    suffix = Path(upload.name).suffix.lower() or ""
-    dest = folder / f"{prefix}{suffix}"
-    dest.write_bytes(upload.getbuffer())
-    return dest
+    if st.button("สร้างคลิป", type="primary", use_container_width=True):
+        if image_file is None or audio_file is None:
+            st.warning("อัปโหลดทั้งรูปและเสียงก่อน")
+            return
+        work = Path("output") / "uploads"
+        work.mkdir(parents=True, exist_ok=True)
+        image_path = work / f"mascot{Path(image_file.name).suffix.lower() or '.jpg'}"
+        audio_path = work / f"voice{Path(audio_file.name).suffix.lower() or '.mp3'}"
+        image_path.write_bytes(image_file.getbuffer())
+        audio_path.write_bytes(audio_file.getbuffer())
+        dest = Path("output") / "lip_sync.mp4"
+        try:
+            with st.spinner("กำลังรวมรูปกับเสียงเป็นวิดีโอ..."):
+                result = make_lip_sync_clip(image_path, audio_path, dest)
+        except LipSyncError as err:
+            st.error(str(err))
+            return
+        except Exception as err:
+            st.error(f"สร้างคลิปไม่สำเร็จ: {err}")
+            return
+        st.success("ได้คลิปแล้ว")
+        st.video(result)
+        st.download_button(
+            "ดาวน์โหลดคลิป",
+            data=Path(result).read_bytes(),
+            file_name="lip_sync.mp4",
+            mime="video/mp4",
+            use_container_width=True,
+        )
 
 
 def render_lip_sync_page():
     import streamlit as st
 
-    st.subheader("🗣️ Mascot Lip-Sync Generator")
-    st.write("อัปโหลดรูปมาสคอตและไฟล์เสียงพากย์ เพื่อสร้างปากขยับ")
+    try:
+        from studio_update import apply_update
 
-    col1, col2 = st.columns(2)
-    with col1:
-        source_image = st.file_uploader(
-            "1. อัปโหลดรูปหน้ามาสคอต (.jpg / .png)",
-            type=["jpg", "jpeg", "png"],
-            key="lipsync_source_image",
-        )
-        if source_image is not None:
-            try:
-                st.image(source_image, caption="รูปมาสคอต", use_container_width=True)
-            except Exception:
-                st.caption(f"อัปโหลดแล้ว: {source_image.name}")
-            try:
-                source_image.seek(0)
-            except Exception:
-                pass
-    with col2:
-        driving_audio = st.file_uploader(
-            "2. อัปโหลดไฟล์เสียงพากย์ (.mp3 / .wav)",
-            type=["mp3", "wav", "m4a"],
-            key="lipsync_audio",
-        )
-        if driving_audio is not None:
-            st.success("อัปโหลดเสียงสำเร็จ")
-            try:
-                st.audio(driving_audio)
-                driving_audio.seek(0)
-            except Exception:
-                st.caption(f"ไฟล์เสียง: {driving_audio.name}")
+        apply_update()
+    except Exception:
+        pass
 
-    tools = describe_setup()
-    with st.expander("ตั้งค่าโมเดลหลังบ้าน"):
-        if not tools["liveportrait"] or (not tools["sadtalker"] and not tools["wav2lip"]):
-            st.caption(
-                "ตั้ง `LIVEPORTRAIT_HOME` และ `SADTALKER_HOME` หรือ `WAV2LIP_HOME` "
-                "ถ้ายังไม่ติดตั้ง ระบบจะแสดงคำสั่งที่จะรัน (dry run)"
-            )
-        live_home = st.text_input(
-            "LIVEPORTRAIT_HOME",
-            value=os.environ.get("LIVEPORTRAIT_HOME", ""),
-            placeholder="/path/to/LivePortrait",
-        )
-        talker_home = st.text_input(
-            "SADTALKER_HOME",
-            value=os.environ.get("SADTALKER_HOME", ""),
-            placeholder="/path/to/SadTalker",
-        )
-        wav_home = st.text_input(
-            "WAV2LIP_HOME",
-            value=os.environ.get("WAV2LIP_HOME", ""),
-            placeholder="/path/to/Wav2Lip",
-        )
-        if live_home:
-            os.environ["LIVEPORTRAIT_HOME"] = live_home.strip()
-        if talker_home:
-            os.environ["SADTALKER_HOME"] = talker_home.strip()
-        if wav_home:
-            os.environ["WAV2LIP_HOME"] = wav_home.strip()
-        dry_run = st.checkbox(
-            "ทดลองดูคำสั่งก่อนรันจริง (dry run)",
-            value=not describe_setup()["liveportrait"],
-        )
-        output_dir = st.text_input("โฟลเดอร์ผลลัพธ์", value="output")
-        template_face = st.file_uploader(
-            "รูปหน้าเทมเพลต SadTalker (ไม่บังคับ — ถ้าไม่ใส่จะใช้รูปมาสคอต)",
-            type=["jpg", "jpeg", "png"],
-            key="lipsync_template_face",
-        )
-        driving_video = st.file_uploader(
-            "Driving Video พร้อมใช้ (ไม่บังคับ — ข้ามขั้นสร้างปากจากเสียง)",
-            type=["mp4", "mov", "webm"],
-            key="lipsync_driving_video",
-        )
-
-    if st.button("🚀 เริ่มเรนเดอร์มาสคอตขยับปาก", type="primary", use_container_width=True):
-        if source_image is None or driving_audio is None:
-            st.warning("⚠️ กรุณาอัปโหลดรูปและเสียงให้ครบก่อน")
-            return
-        st.info("กำลังประมวลผลหลังบ้าน...")
-        work = Path(output_dir) / "uploads"
+    tab_voice, tab_clip = st.tabs(["ถอดเสียงหาคลิป", "รวมรูปกับเสียง"])
+    with tab_voice:
         try:
-            source_path = _save_upload(source_image, work, "source")
-            audio_path = _save_upload(driving_audio, work, "voice")
-            template_path = (
-                _save_upload(template_face, work, "template") if template_face else source_path
-            )
-            driving_path = _save_upload(driving_video, work, "driving") if driving_video else None
-            with st.spinner("กำลังถอดเสียงเป็นคลิปปาก แล้วสวมหน้ามาสคอต..."):
-                result = generate_lip_sync_pipeline(
-                    str(source_path),
-                    driving_audio_path=str(audio_path),
-                    output_dir=output_dir,
-                    template_face_path=str(template_path),
-                    driving_video_path=str(driving_path) if driving_path else None,
-                    dry_run=dry_run,
-                )
-        except LipSyncError as err:
-            st.error(str(err))
-            return
+            from audio_timeline import render_audio_timeline_page
+
+            render_audio_timeline_page(embed=True)
         except Exception as err:
-            st.error(f"รันไม่สำเร็จ: {err}")
-            return
-        if dry_run:
-            st.info("โหมดทดลอง — ยังไม่ได้เรียกโมเดลจริง")
-            for index, step in enumerate(result.get("steps") or [], start=1):
-                st.markdown(f"**ขั้นที่ {index}**  cwd: `{step.get('cwd', '')}`")
-                st.code(" ".join(str(part) for part in step.get("command") or []), language="bash")
-            st.caption(f"ไฟล์ปลายทาง: {result.get('output')}")
-            return
-        st.success(f"✨ สำเร็จ! เซฟวิดีโอไว้ที่: {result}")
-        if Path(result).is_file():
-            st.video(str(result))
-            st.download_button(
-                "📥 ดาวน์โหลดคลิปสุดท้าย",
-                data=Path(result).read_bytes(),
-                file_name=Path(result).name,
-                mime="video/mp4",
-                use_container_width=True,
-            )
+            st.error(f"โหลดหน้าอัปโหลดเสียงไม่สำเร็จ: {err}")
+    with tab_clip:
+        _render_mascot_clip_form()
 
 
+# Older imports keep working. This page never checks talking-head model folders.
+render_mascot_clip_page = render_lip_sync_page
+make_mascot_clip = make_lip_sync_clip
+MascotClipError = LipSyncError

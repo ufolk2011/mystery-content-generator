@@ -109,6 +109,80 @@ def normalize_script(raw):
     return {**empty, "hook": text}
 
 
+def bilingual_fields(item):
+    item = item or {}
+    script_th = normalize_script(item.get("script") or item.get("script_th"))
+    script_en = normalize_script(
+        item.get("script_en") or item.get("script_english") or item.get("english_script")
+    )
+    th_blob = " ".join(script_th.values())
+    en_blob = " ".join(script_en.values())
+    if looks_english(th_blob) and has_script(script_en) and not looks_english(en_blob):
+        script_th, script_en = script_en, script_th
+    elif looks_english(th_blob) and not has_script(script_en):
+        script_en = dict(script_th)
+    return {
+        "title": str(item.get("title") or item.get("title_th") or "").strip(),
+        "title_en": str(item.get("title_en") or item.get("english_title") or "").strip(),
+        "summary": str(item.get("summary") or item.get("summary_th") or "").strip(),
+        "summary_en": str(item.get("summary_en") or "").strip(),
+        "script": script_th,
+        "script_en": script_en,
+    }
+
+
+def has_english_script(topic):
+    script_en = normalize_script(
+        (topic or {}).get("script_en") or (topic or {}).get("script_english")
+    )
+    return has_script(script_en) and looks_english(" ".join(script_en.values()))
+
+
+def apply_english_payload(topic, payload):
+    topic = dict(topic or {})
+    payload = payload or {}
+    nested = payload.get("script_en") or payload.get("script") or payload
+    script_en = normalize_script(nested)
+    title_en = str(payload.get("title_en") or payload.get("english_title") or topic.get("title_en") or "").strip()
+    summary_en = str(payload.get("summary_en") or topic.get("summary_en") or "").strip()
+    if has_script(script_en) and looks_english(" ".join(script_en.values())):
+        topic["script_en"] = script_en
+    if title_en:
+        topic["title_en"] = title_en
+    if summary_en:
+        topic["summary_en"] = summary_en
+    return topic
+
+
+def english_translate_prompt(topic):
+    script = normalize_script((topic or {}).get("script"))
+    return f"""
+Translate this Thai mystery short-form script into natural spoken English for a 30-60 second narration.
+Return JSON only, no markdown:
+{{
+  "title_en": "catchy English title",
+  "summary_en": "one or two English sentences",
+  "script_en": {{
+    "hook": "",
+    "context": "",
+    "twist": "",
+    "reveal": ""
+  }}
+}}
+Thai title: {(topic or {}).get("title") or ""}
+Thai summary: {(topic or {}).get("summary") or ""}
+hook: {script.get("hook", "")}
+context: {script.get("context", "")}
+twist: {script.get("twist", "")}
+reveal: {script.get("reveal", "")}
+
+Rules:
+- script_en must be English only
+- spoken, eerie, concise — not a literal word-for-word translation
+- keep the same four beats
+"""
+
+
 def normalize_topics(payload):
     if isinstance(payload, dict):
         for key in ("topics", "items", "stories", "data"):
@@ -124,28 +198,13 @@ def normalize_topics(payload):
     for item in payload:
         if not isinstance(item, dict):
             continue
-        title = str(item.get("title") or item.get("title_th") or "").strip()
-        if not title:
+        fields = bilingual_fields(item)
+        if not fields["title"]:
             continue
-        script_th = normalize_script(item.get("script") or item.get("script_th"))
-        script_en = normalize_script(
-            item.get("script_en") or item.get("script_english") or item.get("english_script")
-        )
-        th_blob = " ".join(script_th.values())
-        en_blob = " ".join(script_en.values())
-        if looks_english(th_blob) and has_script(script_en) and not looks_english(en_blob):
-            script_th, script_en = script_en, script_th
-        elif looks_english(th_blob) and not has_script(script_en):
-            script_en = dict(script_th)
         topics.append(
             {
                 "id": str(uuid.uuid4()),
-                "title": title,
-                "title_en": str(item.get("title_en") or item.get("english_title") or "").strip(),
-                "summary": str(item.get("summary") or item.get("summary_th") or "").strip(),
-                "summary_en": str(item.get("summary_en") or "").strip(),
-                "script": script_th,
-                "script_en": script_en,
+                **fields,
                 "broll": normalize_keywords(
                     item.get("video_keywords")
                     or item.get("broll")
