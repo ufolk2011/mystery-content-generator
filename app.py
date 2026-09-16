@@ -12,6 +12,42 @@ import streamlit.components.v1 as components
 
 from tts import safe_filename, spoken_script, synthesize
 from lip_sync import render_lip_sync_page
+from script_utils import (
+    EN_SCRIPT_LABELS,
+    apply_english_payload,
+    bilingual_fields,
+    english_translate_prompt,
+    has_english_script,
+    normalize_script,
+    script_copy_text,
+)
+
+try:
+    from audio_timeline import (
+        format_clock,
+        render_audio_timeline_page,
+        transcribe_voice_timeline,
+    )
+except ImportError:
+    format_clock = None
+    render_audio_timeline_page = None
+    transcribe_voice_timeline = None
+
+try:
+    from audio_timeline import with_broll_style
+except ImportError:
+    BROLL_STYLE_SUFFIX = (
+        "vintage archival photo style, grainy old documentary look, "
+        "dark moody cinematic, historical true crime aesthetic"
+    )
+
+    def with_broll_style(keyword):
+        base = str(keyword or "").strip().rstrip(",")
+        if not base:
+            return BROLL_STYLE_SUFFIX
+        if "vintage archival photo style" in base.lower():
+            return base
+        return f"{base}, {BROLL_STYLE_SUFFIX}"
 
 try:
     from video_crop import render_vertical_crop_tab
@@ -198,6 +234,22 @@ st.markdown(
         line-height: 1.55;
         white-space: pre-wrap;
     }
+    .script-lang {
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #111111;
+        margin: 10px 0 6px;
+    }
+    .script-en-title {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: #111111;
+        text-align: center;
+        margin: 0 0 8px;
+        opacity: 0.88;
+    }
     .stButton > button,
     .stDownloadButton > button,
     .stLinkButton > a {
@@ -230,7 +282,7 @@ st.markdown(
 st.sidebar.markdown("**เมนู**")
 menu = st.sidebar.radio(
     "เมนู",
-    ["ค้นหาเรื่อง", "✂️ ครอปคลิป 9:16", "Auto Subtitle", "ลิปซิงค์คาแรกเตอร์"],
+    ["ค้นหาเรื่อง", "ไทม์ไลน์เสียง", "✂️ ครอปคลิป 9:16", "Auto Subtitle", "ลิปซิงค์"],
     label_visibility="collapsed",
     key="menu",
 )
@@ -250,7 +302,7 @@ def render_settings_panel():
 
     model_value = st.selectbox(
         "โมเดล",
-        ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"],
+        ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"],
         index=0,
         key="model_name_v2",
     )
@@ -375,12 +427,12 @@ def normalize_keywords(raw):
 
 
 def clip_search_links(keyword):
-    visual = f"{keyword} cinematic b-roll stock footage"
+    visual = with_broll_style(keyword)
     return [
         ("YouTube", f"https://www.youtube.com/results?search_query={quote_plus(visual)}"),
-        ("Pexels", f"https://www.pexels.com/search/videos/{quote(keyword)}/"),
-        ("Pixabay", f"https://pixabay.com/videos/search/{quote(keyword)}/"),
-        ("Coverr", f"https://coverr.co/search?q={quote_plus(keyword)}"),
+        ("Pexels", f"https://www.pexels.com/search/videos/{quote(visual)}/"),
+        ("Pixabay", f"https://pixabay.com/videos/search/{quote(visual)}/"),
+        ("Coverr", f"https://coverr.co/search?q={quote_plus(visual)}"),
     ]
 
 
@@ -397,7 +449,10 @@ def broll_prompt(title, script):
 ตอบเป็น JSON object เท่านั้น มี 4 คีย์: hook, context, twist, reveal
 แต่ละคีย์เป็น array ของคีย์เวิร์ดภาษาอังกฤษ 2-3 ชุด
 แต่ละชุดเป็นวลีสั้นๆ สำหรับค้นหาคลิปวิดีโอใน YouTube / Pexels / Pixabay
-เน้นภาพที่หาเจอง่าย เช่น dark hallway, candle in darkness, old photograph, city night traffic
+แล้วต้องต่อท้ายทุกชุดด้วย suffix นี้เสมอ:
+, vintage archival photo style, grainy old documentary look, dark moody cinematic, historical true crime aesthetic
+ตัวอย่าง: twin babies family, vintage archival photo style, grainy old documentary look, dark moody cinematic, historical true crime aesthetic
+ห้ามออกคีย์เวิร์ดสั้นๆ โดยไม่มี suffix คุมโทนวินเทจ/สารคดีดาร์ก
 ห้ามใส่คำอธิบายอื่น
 """
 
@@ -418,45 +473,6 @@ def has_broll(broll):
     return any((broll or {}).get(key) for key, _, _ in SCRIPT_SECTIONS)
 
 
-def normalize_script(raw):
-    labels = {
-        "hook": ("ฮุค", "hook", "1"),
-        "context": ("บริบท", "context", "2"),
-        "twist": ("แต่", "twist", "3"),
-        "reveal": ("เฉลย", "reveal", "4"),
-    }
-    empty = {key: "" for key in labels}
-    if isinstance(raw, dict):
-        out = dict(empty)
-        for key, aliases in labels.items():
-            for alias in (key, *aliases):
-                if alias in raw and str(raw[alias]).strip():
-                    out[key] = str(raw[alias]).strip()
-                    break
-        return out
-    text = str(raw or "").strip()
-    named = re.findall(
-        r"(ฮุค|บริบท|แต่|เฉลย)\s*[:：\-)]\s*(.*?)(?=(?:\n\s*(?:ฮุค|บริบท|แต่|เฉลย)\s*[:：\-)]|\Z))",
-        text,
-        flags=re.DOTALL,
-    )
-    if named:
-        mapping = {"ฮุค": "hook", "บริบท": "context", "แต่": "twist", "เฉลย": "reveal"}
-        out = dict(empty)
-        for label, body in named:
-            out[mapping[label]] = body.strip()
-        return out
-    parts = re.split(r"(?:^|\n)\s*(?:ฮุค|บริบท|แต่|เฉลย)\s*[:：\-)]\s*", text)
-    if len(parts) >= 5:
-        return {
-            "hook": parts[1].strip(),
-            "context": parts[2].strip(),
-            "twist": parts[3].strip(),
-            "reveal": parts[4].strip(),
-        }
-    return {**empty, "hook": text}
-
-
 def normalize_topics(payload):
     if isinstance(payload, dict):
         for key in ("topics", "items", "stories", "data"):
@@ -472,15 +488,13 @@ def normalize_topics(payload):
     for item in payload:
         if not isinstance(item, dict):
             continue
-        title = str(item.get("title") or "").strip()
-        if not title:
+        fields = bilingual_fields(item)
+        if not fields["title"]:
             continue
         topics.append(
             {
                 "id": str(uuid.uuid4()),
-                "title": title,
-                "summary": str(item.get("summary") or "").strip(),
-                "script": normalize_script(item.get("script")),
+                **fields,
                 "broll": normalize_keywords(
                     item.get("video_keywords")
                     or item.get("broll")
@@ -499,32 +513,25 @@ def add_history_title(title):
     st.session_state.history = history
 
 
-def script_copy_text(title, script):
-    return (
-        f"{title}\n\n"
-        f"ฮุค: {script.get('hook', '')}\n\n"
-        f"บริบท: {script.get('context', '')}\n\n"
-        f"แต่: {script.get('twist', '')}\n\n"
-        f"เฉลย: {script.get('reveal', '')}"
-    ).strip()
-
-
-def copy_script_button(text, key):
+def copy_script_button(text, key, label="📋 Copy สคริปต์"):
     payload = json.dumps(text, ensure_ascii=False)
     safe_key = html.escape(key)
+    safe_label = html.escape(label)
+    label_js = json.dumps(label, ensure_ascii=False)
     components.html(
         f"""
-        <div style="font-family:sans-serif">
-          <button id="{safe_key}" type="button" style="width:100%;border:0;border-radius:16px;padding:10px 14px;background:#111111;color:#ffffff;font-size:14px;font-weight:700;cursor:pointer">📋 Copy สคริปต์</button>
+        <div style="font-family:Kanit,sans-serif">
+          <button id="{safe_key}" type="button" style="width:100%;border:0;border-radius:16px;padding:10px 14px;background:#111111;color:#ffffff;font-size:14px;font-weight:700;cursor:pointer">{safe_label}</button>
         </div>
         <script>
           const btn = document.getElementById("{safe_key}");
           const text = {payload};
+          const label = {label_js};
           btn.addEventListener("click", async () => {{
             try {{
               await navigator.clipboard.writeText(text);
               btn.textContent = "✅ คัดลอกแล้ว";
-              setTimeout(() => btn.textContent = "📋 Copy สคริปต์", 1600);
+              setTimeout(() => btn.textContent = label, 1600);
             }} catch (err) {{
               btn.textContent = "คัดลอกไม่สำเร็จ";
             }}
@@ -535,17 +542,147 @@ def copy_script_button(text, key):
     )
 
 
-def render_script_sections(script):
-    for key, label, color in SCRIPT_SECTIONS:
+def render_voice_segments(segments, ui_key="voice-tl"):
+    for index, seg in enumerate(segments):
+        start_label = format_clock(seg["start"])
+        end_label = format_clock(seg["end"])
         st.markdown(
             f"""
-            <div class="script-block" style="--accent:{color}">
-              <div class="script-label">{label}</div>
-              <div class="script-text">{html.escape(script.get(key, ""))}</div>
+            <div class="script-block" style="--accent:#38bdf8">
+              <div class="script-label">{start_label} – {end_label}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
+        thai_col, eng_col = st.columns(2)
+        with thai_col:
+            st.markdown("**ไทย**")
+            st.write(seg.get("th") or "—")
+        with eng_col:
+            st.markdown("**English**")
+            st.write(seg.get("en") or "—")
+        keywords = seg.get("keywords") or []
+        if not keywords:
+            continue
+        st.caption("หาพาก / คลิปประกอบจากช่วงนี้")
+        for k_idx, keyword in enumerate(keywords[:3]):
+            st.caption(f"คีย์เวิร์ด: `{with_broll_style(keyword)}`")
+            cols = st.columns(4)
+            for col, (name, url) in zip(cols, clip_search_links(keyword)):
+                col.link_button(
+                    name,
+                    url,
+                    use_container_width=True,
+                    key=f"{ui_key}-{index}-{k_idx}-{name}",
+                )
+
+
+def render_script_sections(script, english=False):
+    for key, label, color in SCRIPT_SECTIONS:
+        shown = EN_SCRIPT_LABELS[key] if english else label
+        st.markdown(
+            f"""
+            <div class="script-block" style="--accent:{color}">
+              <div class="script-label">{shown}</div>
+              <div class="script-text">{html.escape((script or {}).get(key, ""))}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def persist_topic_update(topic, persist_index=None):
+    if persist_index is None:
+        st.session_state.results = [
+            {**item, **{k: topic.get(k) for k in ("title_en", "summary_en", "script_en")}}
+            if item.get("id") == topic.get("id")
+            else item
+            for item in st.session_state.results
+        ]
+        return
+    saved = list(st.session_state.saved)
+    if 0 <= persist_index < len(saved):
+        saved[persist_index].update(
+            {
+                "title_en": topic.get("title_en", ""),
+                "summary_en": topic.get("summary_en", ""),
+                "script_en": topic.get("script_en") or {},
+            }
+        )
+        save_saved(saved)
+        st.session_state.saved = saved
+
+
+def fill_english_script(topic):
+    if not api_key:
+        raise ValueError("ใส่ Gemini API Key ก่อนเพื่อแปลสคริปต์อังกฤษ")
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=model_name,
+        contents=english_translate_prompt(topic),
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            thinking_config=types.ThinkingConfig(thinking_level="low"),
+        ),
+    )
+    updated = apply_english_payload(topic, extract_json(response.text))
+    if not has_english_script(updated):
+        raise ValueError("AI ยังไม่ได้สคริปต์อังกฤษที่สมบูรณ์")
+    topic.update(updated)
+    return topic
+
+
+def render_english_script_panel(topic, widget_key, persist_index=None):
+    topic.update(bilingual_fields(topic))
+    st.markdown('<div class="script-lang">English script</div>', unsafe_allow_html=True)
+    if has_english_script(topic):
+        if topic.get("title_en"):
+            st.markdown(
+                f'<div class="script-en-title">{html.escape(topic["title_en"])}</div>',
+                unsafe_allow_html=True,
+            )
+        if topic.get("summary_en"):
+            st.caption(topic["summary_en"])
+        render_script_sections(topic.get("script_en"), english=True)
+        copy_script_button(
+            script_copy_text(
+                topic.get("title", ""),
+                topic.get("script"),
+                topic.get("title_en", ""),
+                topic.get("script_en"),
+                "English",
+            ),
+            f"copy-en-{widget_key}",
+            "📋 Copy English script",
+        )
+        return
+    st.warning("เรื่องนี้ยังมีแค่สคริปต์ไทย กดปุ่มด้านล่างเพื่อสร้างสคริปต์อังกฤษทันที")
+    if st.button("🇺🇸 สร้างสคริปต์อังกฤษของเรื่องนี้", key=f"mk-en-{widget_key}", type="primary", use_container_width=True):
+        try:
+            with st.spinner("กำลังแปลเป็นสคริปต์อังกฤษ..."):
+                fill_english_script(topic)
+            persist_topic_update(topic, persist_index)
+            st.rerun()
+        except Exception as err:
+            st.error(f"สร้างสคริปต์อังกฤษไม่สำเร็จ: {err}")
+
+
+def render_topic_scripts(topic, widget_key, persist_index=None):
+    topic.update(bilingual_fields(topic))
+    st.markdown('<div class="script-lang">สคริปต์ไทย</div>', unsafe_allow_html=True)
+    render_script_sections(topic.get("script"))
+    copy_script_button(
+        script_copy_text(
+            topic.get("title", ""),
+            topic.get("script"),
+            topic.get("title_en", ""),
+            topic.get("script_en"),
+            "ไทย",
+        ),
+        f"copy-th-{widget_key}",
+        "📋 Copy สคริปต์ไทย",
+    )
+    render_english_script_panel(topic, widget_key, persist_index)
 
 
 def store_broll(audio_key, broll, topic=None):
@@ -569,9 +706,10 @@ def store_broll(audio_key, broll, topic=None):
     ]
 
 
-def render_broll_finder(audio_key, title, script, existing=None, topic=None):
+def render_broll_finder(audio_key, title, script, existing=None, topic=None, ui_key=None):
     broll = st.session_state.broll.get(audio_key) or normalize_keywords(existing)
-    if st.button("🎬 ค้นหาคลิปประกอบ", key=f"broll-{audio_key}", use_container_width=True):
+    widget_key = ui_key or audio_key
+    if st.button("🎬 ค้นหาคลิปประกอบ", key=f"broll-{widget_key}", use_container_width=True):
         if not has_broll(broll):
             if not api_key:
                 st.error("ใส่ Gemini API Key ก่อนเพื่อให้ AI หาคีย์เวิร์ดคลิป")
@@ -598,10 +736,10 @@ def render_broll_finder(audio_key, title, script, existing=None, topic=None):
             continue
         st.markdown(f"<div class='script-label' style='color:#111111;margin:8px 0 4px'>{label}</div>", unsafe_allow_html=True)
         for idx, keyword in enumerate(keywords[:2]):
-            st.caption(f"คีย์เวิร์ด: `{keyword}`")
+            st.caption(f"คีย์เวิร์ด: `{with_broll_style(keyword)}`")
             cols = st.columns(4)
             for col, (name, url) in zip(cols, clip_search_links(keyword)):
-                col.link_button(name, url, use_container_width=True)
+                col.link_button(name, url, use_container_width=True, key=f"clip-{widget_key}-{key}-{idx}-{name}")
 
 
 def render_tts_controls(audio_key, title, script):
@@ -645,10 +783,16 @@ def render_card(topic, tone="yellow"):
         """,
         unsafe_allow_html=True,
     )
-    render_script_sections(topic["script"])
-    copy_script_button(script_copy_text(topic["title"], topic["script"]), f"copy-{topic['id']}")
+    render_topic_scripts(topic, topic["id"])
     render_tts_controls(topic["id"], topic["title"], topic["script"])
-    render_broll_finder(topic["id"], topic["title"], topic["script"], topic.get("broll"), topic)
+    render_broll_finder(
+        topic["id"],
+        topic["title"],
+        topic["script"],
+        topic.get("broll"),
+        topic,
+        ui_key=f"card-{topic['id']}",
+    )
     keep_col, drop_col = st.columns(2)
     if keep_col.button("💾 เก็บไว้", key=f"keep-{topic['id']}", type="primary", use_container_width=True):
         add_history_title(topic["title"])
@@ -676,6 +820,8 @@ if "broll" not in st.session_state:
     st.session_state.broll = {}
 if "show_broll" not in st.session_state:
     st.session_state.show_broll = {}
+if "voice_timeline" not in st.session_state:
+    st.session_state.voice_timeline = []
 
 st.sidebar.markdown(f"**เรื่องที่เคยเก็บไว้**  {len(st.session_state.history)} เรื่อง")
 if st.session_state.history:
@@ -687,7 +833,13 @@ if st.session_state.history:
         st.session_state.history = []
         st.rerun()
 
-if menu == "ลิปซิงค์คาแรกเตอร์":
+if menu in ("ไทม์ไลน์เสียง", "ไทม์ไลน์"):
+    if render_audio_timeline_page:
+        render_audio_timeline_page()
+    else:
+        st.error("ไม่พบไฟล์ audio_timeline.py ในโฟลเดอร์โปรเจกต์ — คัดลอกไฟล์นี้มาวางแล้วรีสตาร์ท")
+    st.stop()
+if menu in ("ลิปซิงค์", "สร้างคลิปมาสคอต"):
     render_lip_sync_page()
     st.stop()
 if menu in ("ครอปคลิป 9:16", "✂️ ครอปคลิป 9:16"):
@@ -721,7 +873,7 @@ with tab1:
     with col_a:
         api_key, model_name, voice_id, eleven_key, eleven_voice = render_settings_panel()
     with col_b:
-        st.info("กดค้นหาเรื่องใหม่ เพื่อได้สคริปต์ Hook / Context / Twist / Reveal สำหรับคลิปสั้น แล้วลองฟังเสียงพากย์ได้ในหน้านี้")
+        st.info("กดค้นหาเรื่องใหม่ เพื่อได้สคริปต์ไทยและอังกฤษ หรือเปิดเรื่องที่เก็บไว้แล้วกดสร้างสคริปต์อังกฤษ")
         if not api_key:
             st.warning("ใส่ Gemini API Key ก่อนเริ่มค้นหาเรื่อง")
         elif st.button("🔍 ค้นหาเรื่องใหม่ (5 เรื่อง)", type="primary"):
@@ -737,17 +889,26 @@ with tab1:
 ตอบกลับเป็น JSON Array เท่านั้น ห้ามมี markdown หรือคำอธิบายอื่น
 แต่ละเรื่องเป็น object ตามนี้:
 - title: ชื่อเรื่องภาษาไทยที่ดึงดูด
-- summary: สรุปสั้นๆ ว่าเรื่องเกี่ยวกับอะไร และทำไมถึงน่าสนใจ
-- script: object มี 4 คีย์
+- title_en: ชื่อเรื่องภาษาอังกฤษที่ดึงดูด ความหมายเดียวกับ title
+- summary: สรุปสั้นๆ ภาษาไทย ว่าเรื่องเกี่ยวกับอะไร และทำไมถึงน่าสนใจ
+- summary_en: สรุปภาษาอังกฤษ ความหมายเดียวกับ summary
+- script: object มี 4 คีย์ เขียนเป็นภาษาไทยเท่านั้น
   - hook: ฮุค (ประโยคทำให้สงสัย)
   - context: บริบท (3-4 ประโยคปูเรื่อง/ความเชื่อเดิม)
   - twist: แต่ (ประโยคพลิกสถานการณ์)
   - reveal: เฉลย (ประโยคอธิบายความจริงที่ต่างออกไป)
+- script_en: object มี 4 คีย์ hook, context, twist, reveal เขียนเป็นภาษาอังกฤษเท่านั้น
+  เป็นสคริปต์พากย์อังกฤษที่พูดได้จริง ไม่ใช่คำแปลคำต่อคำ
 - video_keywords: object มี 4 คีย์ hook, context, twist, reveal
   แต่ละคีย์เป็น array ของคีย์เวิร์ดภาษาอังกฤษ 2-3 ชุด สำหรับค้นหาคลิป B-roll ใน YouTube / Pexels / Pixabay
-  ใช้วลีสั้นที่หาภาพเจอง่าย เช่น dark hallway night, candle flickering, old photograph close up
+  ใช้วลีสั้นที่หาภาพเจอง่าย แล้วต่อท้ายทุกชุดด้วย:
+  , vintage archival photo style, grainy old documentary look, dark moody cinematic, historical true crime aesthetic
+  ตัวอย่าง: twin babies family, vintage archival photo style, grainy old documentary look, dark moody cinematic, historical true crime aesthetic
 
-สคริปต์รวมทุกส่วนแล้วพูดจบใน 30-60 วินาที ใช้ภาษาไทยที่เป็นธรรมชาติ
+สคริปต์ไทยและอังกฤษรวมทุกส่วนแล้วพูดจบใน 30-60 วินาที
+script ต้องเป็นภาษาไทยที่เป็นธรรมชาติ
+script_en ต้องเป็นภาษาอังกฤษที่เป็นธรรมชาติ ห้ามเว้นว่าง
+ห้ามสลับภาษา: อย่าใส่ประโยคอังกฤษใน script และอย่าใส่ประโยคไทยใน script_en
 """
                     response = client.models.generate_content(
                         model=model_name,
@@ -780,28 +941,86 @@ with tab1:
 
 with tab2:
     st.subheader("🎵 อัปโหลดไฟล์เสียงพากย์เพื่อสร้างไทม์ไลน์ภาพประกอบ")
-    st.info("เลือกเรื่องจากแท็บ 1 หรือเรื่องที่เก็บไว้ แล้วแตกฉากหาคลิปประกอบได้ด้านล่าง")
-    saved_or_results = list(st.session_state.results) + [
-        {**item, "id": f"saved-{idx}"} for idx, item in enumerate(st.session_state.saved)
-    ]
-    if not saved_or_results:
-        st.caption("ยังไม่มีเรื่องให้จับไทม์ไลน์ สร้างเรื่องในแท็บ 1 ก่อน")
+    st.write(
+        "อัปโหลดเสียงพากย์ แล้วระบบจะบอกว่าวินาทีนี้พูดอะไร "
+        "แปลไทย/อังกฤษ และหาคลิปประกอบให้แต่ละช่วง"
+    )
+    uploaded_voice = st.file_uploader(
+        "เลือกไฟล์เสียงพากย์ (.mp3 / .wav / .m4a)",
+        type=["mp3", "wav", "m4a", "aac", "ogg"],
+        key="timeline_voice_upload",
+    )
+    if uploaded_voice is not None:
+        if st.session_state.get("voice_tl_source") != uploaded_voice.name:
+            st.session_state.voice_timeline = []
+            st.session_state.voice_tl_source = uploaded_voice.name
+        st.audio(uploaded_voice)
+        st.caption(f"ไฟล์ที่เลือก: {uploaded_voice.name}")
+        timeline_key = st.session_state.get("api_key") or os.environ.get("GEMINI_API_KEY", "")
+        timeline_model = st.session_state.get("model_name_v2") or "gemini-2.5-flash"
+        if not timeline_key:
+            st.warning("ใส่ Gemini API Key ที่แท็บ 1 ก่อน เพื่อถอดเสียงตามวินาที")
+        elif not transcribe_voice_timeline:
+            st.error("ไม่พบไฟล์ audio_timeline.py ในโฟลเดอร์โปรเจกต์")
+        elif st.button(
+            "ถอดเสียงตามวินาที แปลไทย/อังกฤษ และหาคลิปประกอบ",
+            type="primary",
+            use_container_width=True,
+            key="transcribe_voice_timeline",
+        ):
+            try:
+                with st.spinner("กำลังฟังเสียง แยกช่วงเวลา และหาคลิปประกอบ..."):
+                    audio_bytes = bytes(uploaded_voice.getbuffer())
+                    client = genai.Client(api_key=timeline_key)
+                    st.session_state.voice_timeline = transcribe_voice_timeline(
+                        client,
+                        timeline_model,
+                        audio_bytes,
+                        uploaded_voice.name,
+                    )
+                try:
+                    uploaded_voice.seek(0)
+                except Exception:
+                    pass
+                st.success(f"ได้ {len(st.session_state.voice_timeline)} ช่วงจากไฟล์เสียง")
+            except Exception as err:
+                st.error(f"ถอดเสียงไม่สำเร็จ: {err}")
     else:
-        labels = [item.get("title", "ไม่มีชื่อ") for item in saved_or_results]
-        picked = st.selectbox(
-            "เลือกเรื่อง",
-            list(range(len(labels))),
-            format_func=lambda idx: labels[idx],
-            key="timeline_story_pick",
-        )
-        topic = saved_or_results[picked]
-        render_broll_finder(
-            topic.get("id"),
-            topic.get("title", "script"),
-            normalize_script(topic.get("script")),
-            topic.get("broll") or topic.get("video_keywords"),
-            topic,
-        )
+        st.caption("ยังไม่มีไฟล์เสียง — อัปโหลด .mp3 / .wav / .m4a ได้เลยด้านบน")
+
+    if st.session_state.voice_timeline:
+        st.markdown("---")
+        st.subheader("ไทม์ไลน์จากไฟล์เสียง")
+        if format_clock:
+            render_voice_segments(st.session_state.voice_timeline, ui_key="voice-tl")
+        else:
+            st.error("ไม่พบไฟล์ audio_timeline.py")
+
+    st.markdown("---")
+    with st.expander("หรือเลือกเรื่องจากแท็บ 1 / คลัง แล้วหาคลิปจากสคริปต์"):
+        st.info("ใช้เมื่อยังไม่อัปโหลดไฟล์เสียง แต่มีเรื่องจากแท็บสร้างสคริปต์")
+        saved_or_results = list(st.session_state.results) + [
+            {**item, "id": f"saved-{idx}"} for idx, item in enumerate(st.session_state.saved)
+        ]
+        if not saved_or_results:
+            st.caption("ยังไม่มีเรื่องให้จับไทม์ไลน์ สร้างเรื่องในแท็บ 1 ก่อน")
+        else:
+            labels = [item.get("title", "ไม่มีชื่อ") for item in saved_or_results]
+            picked = st.selectbox(
+                "เลือกเรื่อง",
+                list(range(len(labels))),
+                format_func=lambda idx: labels[idx],
+                key="timeline_story_pick",
+            )
+            topic = saved_or_results[picked]
+            render_broll_finder(
+                topic.get("id"),
+                topic.get("title", "script"),
+                normalize_script(topic.get("script")),
+                topic.get("broll") or topic.get("video_keywords"),
+                topic,
+                ui_key=f"timeline-{topic.get('id')}",
+            )
 
 with tab3:
     st.subheader("จัดการประวัติและเรื่องที่เก็บไว้")
@@ -809,22 +1028,40 @@ with tab3:
     if not saved_stories:
         st.info("ยังไม่มีเรื่องที่เก็บไว้ กดเก็บไว้ในแท็บสร้างสคริปต์ก่อน")
     else:
+        missing_en = [
+            idx for idx, item in enumerate(saved_stories) if not has_english_script(item)
+        ]
+        if missing_en:
+            st.warning(f"มี {len(missing_en)} เรื่องที่ยังไม่มีสคริปต์อังกฤษ — กดปุ่มนี้หรือเปิดเรื่องแล้วสร้างทีละเรื่อง")
+            if st.button("🇺🇸 สร้างสคริปต์อังกฤษให้ทุกเรื่องที่ยังไม่มี", type="primary"):
+                if not api_key:
+                    st.error("ใส่ Gemini API Key ที่แท็บสร้างสคริปต์ก่อน")
+                else:
+                    try:
+                        with st.spinner("กำลังสร้างสคริปต์อังกฤษให้เรื่องที่เก็บไว้..."):
+                            for idx in missing_en:
+                                fill_english_script(saved_stories[idx])
+                                persist_topic_update(saved_stories[idx], idx)
+                        st.rerun()
+                    except Exception as err:
+                        st.error(f"สร้างสคริปต์อังกฤษไม่สำเร็จ: {err}")
         for index, topic in enumerate(reversed(saved_stories)):
             real_index = len(saved_stories) - 1 - index
             script = normalize_script(topic.get("script"))
-            with st.expander(topic.get("title", "ไม่มีชื่อ")):
+            with st.expander(topic.get("title", "ไม่มีชื่อ"), expanded=(index == 0)):
                 st.write(topic.get("summary", ""))
-                render_script_sections(script)
-                copy_script_button(
-                    script_copy_text(topic.get("title", ""), script),
-                    f"copy-saved-{real_index}",
+                render_topic_scripts(topic, f"saved-{real_index}", persist_index=real_index)
+                render_tts_controls(
+                    f"saved-{real_index}",
+                    topic.get("title", "script"),
+                    script,
                 )
-                render_tts_controls(f"saved-{real_index}", topic.get("title", "script"), script)
                 render_broll_finder(
                     f"saved-{real_index}",
                     topic.get("title", "script"),
                     script,
                     topic.get("broll") or topic.get("video_keywords"),
+                    ui_key=f"library-{real_index}",
                 )
                 if st.button("ลบออกจากคลัง", key=f"unsave-{real_index}"):
                     saved_stories.pop(real_index)
