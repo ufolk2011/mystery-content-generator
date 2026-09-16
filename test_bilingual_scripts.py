@@ -76,17 +76,29 @@ class BilingualScriptTests(unittest.TestCase):
         self.assertIn("ผิวหนัง", topics[0]["script"]["hook"])
         self.assertIn("human skin", topics[0]["script_en"]["hook"])
 
-    def test_copy_text_includes_english(self):
+    def test_copy_thai_only(self):
         text = script_copy_text(
             "แห่งไอซ์แลนด์",
             {"hook": "ฮุคไทย", "context": "บริบท", "twist": "แต่", "reveal": "เฉลย"},
             "Iceland",
             {"hook": "English hook", "context": "Context", "twist": "Twist", "reveal": "Reveal"},
-            "ทั้งสอง",
+            "ไทย",
         )
         self.assertIn("ฮุคไทย", text)
+        self.assertNotIn("English hook", text)
+        self.assertNotIn("--- English ---", text)
+
+    def test_copy_english_only(self):
+        text = script_copy_text(
+            "แห่งไอซ์แลนด์",
+            {"hook": "ฮุคไทย", "context": "", "twist": "", "reveal": ""},
+            "Iceland",
+            {"hook": "English hook", "context": "", "twist": "", "reveal": ""},
+            "English",
+        )
         self.assertIn("English hook", text)
-        self.assertIn("--- English ---", text)
+        self.assertNotIn("ฮุคไทย", text)
+        self.assertNotIn("--- English ---", text)
 
     def test_apply_english_payload(self):
         topic = apply_english_payload(
@@ -118,15 +130,6 @@ class BilingualScriptTests(unittest.TestCase):
             }
         )
         self.assertFalse(has_english_script(topic))
-        text = script_copy_text(
-            "แห่งไอซ์แลนด์",
-            {"hook": "ฮุคไทย", "context": "", "twist": "", "reveal": ""},
-            "Iceland",
-            {"hook": "English hook", "context": "", "twist": "", "reveal": ""},
-            "English",
-        )
-        self.assertIn("English hook", text)
-        self.assertNotIn("ฮุคไทย", text)
 
 
 if __name__ == "__main__":

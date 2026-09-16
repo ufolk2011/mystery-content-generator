@@ -513,22 +513,25 @@ def add_history_title(title):
     st.session_state.history = history
 
 
-def copy_script_button(text, key):
+def copy_script_button(text, key, label="📋 Copy สคริปต์"):
     payload = json.dumps(text, ensure_ascii=False)
     safe_key = html.escape(key)
+    safe_label = html.escape(label)
+    label_js = json.dumps(label, ensure_ascii=False)
     components.html(
         f"""
-        <div style="font-family:sans-serif">
-          <button id="{safe_key}" type="button" style="width:100%;border:0;border-radius:16px;padding:10px 14px;background:#111111;color:#ffffff;font-size:14px;font-weight:700;cursor:pointer">📋 Copy สคริปต์</button>
+        <div style="font-family:Kanit,sans-serif">
+          <button id="{safe_key}" type="button" style="width:100%;border:0;border-radius:16px;padding:10px 14px;background:#111111;color:#ffffff;font-size:14px;font-weight:700;cursor:pointer">{safe_label}</button>
         </div>
         <script>
           const btn = document.getElementById("{safe_key}");
           const text = {payload};
+          const label = {label_js};
           btn.addEventListener("click", async () => {{
             try {{
               await navigator.clipboard.writeText(text);
               btn.textContent = "✅ คัดลอกแล้ว";
-              setTimeout(() => btn.textContent = "📋 Copy สคริปต์", 1600);
+              setTimeout(() => btn.textContent = label, 1600);
             }} catch (err) {{
               btn.textContent = "คัดลอกไม่สำเร็จ";
             }}
@@ -641,6 +644,17 @@ def render_english_script_panel(topic, widget_key, persist_index=None):
         if topic.get("summary_en"):
             st.caption(topic["summary_en"])
         render_script_sections(topic.get("script_en"), english=True)
+        copy_script_button(
+            script_copy_text(
+                topic.get("title", ""),
+                topic.get("script"),
+                topic.get("title_en", ""),
+                topic.get("script_en"),
+                "English",
+            ),
+            f"copy-en-{widget_key}",
+            "📋 Copy English script",
+        )
         return
     st.warning("เรื่องนี้ยังมีแค่สคริปต์ไทย กดปุ่มด้านล่างเพื่อสร้างสคริปต์อังกฤษทันที")
     if st.button("🇺🇸 สร้างสคริปต์อังกฤษของเรื่องนี้", key=f"mk-en-{widget_key}", type="primary", use_container_width=True):
@@ -657,17 +671,18 @@ def render_topic_scripts(topic, widget_key, persist_index=None):
     topic.update(bilingual_fields(topic))
     st.markdown('<div class="script-lang">สคริปต์ไทย</div>', unsafe_allow_html=True)
     render_script_sections(topic.get("script"))
-    render_english_script_panel(topic, widget_key, persist_index)
     copy_script_button(
         script_copy_text(
             topic.get("title", ""),
             topic.get("script"),
             topic.get("title_en", ""),
             topic.get("script_en"),
-            "ทั้งสอง",
+            "ไทย",
         ),
-        f"copy-{widget_key}",
+        f"copy-th-{widget_key}",
+        "📋 Copy สคริปต์ไทย",
     )
+    render_english_script_panel(topic, widget_key, persist_index)
 
 
 def store_broll(audio_key, broll, topic=None):

@@ -215,7 +215,7 @@ def normalize_topics(payload):
     return topics[:5]
 
 
-def script_copy_text(title, script, title_en="", script_en=None, lang="ทั้งสอง"):
+def script_copy_text(title, script, title_en="", script_en=None, lang="ไทย"):
     thai = (
         f"{title}\n\n"
         f"ฮุค: {(script or {}).get('hook', '')}\n\n"
@@ -234,6 +234,4 @@ def script_copy_text(title, script, title_en="", script_en=None, lang="ทั้
         return thai
     if lang == "English":
         return english
-    if has_script(script_en):
-        return f"{thai}\n\n--- English ---\n\n{english}".strip()
     return thai
