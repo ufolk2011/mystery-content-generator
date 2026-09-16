@@ -2,7 +2,6 @@ import html
 import json
 import os
 import re
-import uuid
 from urllib.parse import quote, quote_plus
 
 from google import genai
@@ -12,6 +11,15 @@ import streamlit.components.v1 as components
 
 from tts import safe_filename, spoken_script, synthesize
 from lip_sync import render_lip_sync_page
+from script_utils import (
+    EN_SCRIPT_LABELS,
+    SCRIPT_SECTIONS,
+    has_script,
+    normalize_keywords,
+    normalize_script,
+    normalize_topics,
+    script_copy_text,
+)
 
 try:
     from video_crop import render_vertical_crop_tab
@@ -198,6 +206,22 @@ st.markdown(
         line-height: 1.55;
         white-space: pre-wrap;
     }
+    .script-lang {
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #111111;
+        margin: 8px 0 6px;
+    }
+    .script-en-title {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: #111111;
+        text-align: center;
+        margin: 0 0 8px;
+        opacity: 0.88;
+    }
     .stButton > button,
     .stDownloadButton > button,
     .stLinkButton > a {
@@ -335,45 +359,6 @@ def extract_json(text):
         return json.loads(match.group(1))
 
 
-SCRIPT_SECTIONS = (
-    ("hook", "ฮุค", "#a78bfa"),
-    ("context", "บริบท", "#38bdf8"),
-    ("twist", "แต่", "#f59e0b"),
-    ("reveal", "เฉลย", "#34d399"),
-)
-
-
-def normalize_keywords(raw):
-    empty = {key: [] for key, _, _ in SCRIPT_SECTIONS}
-    if isinstance(raw, str):
-        bits = [part.strip() for part in re.split(r"[,;\n|/]", raw) if part.strip()]
-        if bits:
-            empty["hook"] = bits[:3]
-        return empty
-    if not isinstance(raw, dict):
-        return empty
-    aliases = {
-        "hook": ("hook", "ฮุค", "1"),
-        "context": ("context", "บริบท", "2"),
-        "twist": ("twist", "แต่", "3"),
-        "reveal": ("reveal", "เฉลย", "4"),
-    }
-    out = dict(empty)
-    for key, names in aliases.items():
-        value = None
-        for name in names:
-            if name in raw:
-                value = raw[name]
-                break
-        items = []
-        if isinstance(value, str):
-            items = [part.strip() for part in re.split(r"[,;\n|/]", value) if part.strip()]
-        elif isinstance(value, list):
-            items = [str(part).strip() for part in value if str(part).strip()]
-        out[key] = items[:4]
-    return out
-
-
 def clip_search_links(keyword):
     visual = f"{keyword} cinematic b-roll stock footage"
     return [
@@ -418,95 +403,12 @@ def has_broll(broll):
     return any((broll or {}).get(key) for key, _, _ in SCRIPT_SECTIONS)
 
 
-def normalize_script(raw):
-    labels = {
-        "hook": ("ฮุค", "hook", "1"),
-        "context": ("บริบท", "context", "2"),
-        "twist": ("แต่", "twist", "3"),
-        "reveal": ("เฉลย", "reveal", "4"),
-    }
-    empty = {key: "" for key in labels}
-    if isinstance(raw, dict):
-        out = dict(empty)
-        for key, aliases in labels.items():
-            for alias in (key, *aliases):
-                if alias in raw and str(raw[alias]).strip():
-                    out[key] = str(raw[alias]).strip()
-                    break
-        return out
-    text = str(raw or "").strip()
-    named = re.findall(
-        r"(ฮุค|บริบท|แต่|เฉลย)\s*[:：\-)]\s*(.*?)(?=(?:\n\s*(?:ฮุค|บริบท|แต่|เฉลย)\s*[:：\-)]|\Z))",
-        text,
-        flags=re.DOTALL,
-    )
-    if named:
-        mapping = {"ฮุค": "hook", "บริบท": "context", "แต่": "twist", "เฉลย": "reveal"}
-        out = dict(empty)
-        for label, body in named:
-            out[mapping[label]] = body.strip()
-        return out
-    parts = re.split(r"(?:^|\n)\s*(?:ฮุค|บริบท|แต่|เฉลย)\s*[:：\-)]\s*", text)
-    if len(parts) >= 5:
-        return {
-            "hook": parts[1].strip(),
-            "context": parts[2].strip(),
-            "twist": parts[3].strip(),
-            "reveal": parts[4].strip(),
-        }
-    return {**empty, "hook": text}
-
-
-def normalize_topics(payload):
-    if isinstance(payload, dict):
-        for key in ("topics", "items", "stories", "data"):
-            if isinstance(payload.get(key), list):
-                payload = payload[key]
-                break
-        else:
-            payload = [payload]
-    if not isinstance(payload, list):
-        raise ValueError("ผลลัพธ์ไม่ใช่รายการเรื่อง")
-
-    topics = []
-    for item in payload:
-        if not isinstance(item, dict):
-            continue
-        title = str(item.get("title") or "").strip()
-        if not title:
-            continue
-        topics.append(
-            {
-                "id": str(uuid.uuid4()),
-                "title": title,
-                "summary": str(item.get("summary") or "").strip(),
-                "script": normalize_script(item.get("script")),
-                "broll": normalize_keywords(
-                    item.get("video_keywords")
-                    or item.get("broll")
-                    or item.get("clip_keywords")
-                ),
-            }
-        )
-    return topics[:5]
-
-
 def add_history_title(title):
     history = load_history()
     if title not in history:
         history.append(title)
         save_history(history)
     st.session_state.history = history
-
-
-def script_copy_text(title, script):
-    return (
-        f"{title}\n\n"
-        f"ฮุค: {script.get('hook', '')}\n\n"
-        f"บริบท: {script.get('context', '')}\n\n"
-        f"แต่: {script.get('twist', '')}\n\n"
-        f"เฉลย: {script.get('reveal', '')}"
-    ).strip()
 
 
 def copy_script_button(text, key):
@@ -535,17 +437,60 @@ def copy_script_button(text, key):
     )
 
 
-def render_script_sections(script):
+def render_script_sections(script, english=False):
     for key, label, color in SCRIPT_SECTIONS:
+        shown = EN_SCRIPT_LABELS[key] if english else label
         st.markdown(
             f"""
             <div class="script-block" style="--accent:{color}">
-              <div class="script-label">{label}</div>
-              <div class="script-text">{html.escape(script.get(key, ""))}</div>
+              <div class="script-label">{shown}</div>
+              <div class="script-text">{html.escape((script or {}).get(key, ""))}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
+
+
+def render_topic_scripts(topic, widget_key):
+    script_th = normalize_script(topic.get("script"))
+    script_en = normalize_script(topic.get("script_en") or topic.get("script_english"))
+    options = ["ทั้งสอง", "ไทย", "English"]
+    lang = st.radio(
+        "ภาษาสคริปต์",
+        options,
+        horizontal=True,
+        key=f"lang-{widget_key}",
+        label_visibility="collapsed",
+    )
+    show_th = lang in ("ไทย", "ทั้งสอง")
+    show_en = lang in ("English", "ทั้งสอง")
+    if show_th:
+        st.markdown('<div class="script-lang">สคริปต์ไทย</div>', unsafe_allow_html=True)
+        render_script_sections(script_th)
+    if show_en:
+        st.markdown('<div class="script-lang">English script</div>', unsafe_allow_html=True)
+        if topic.get("title_en"):
+            st.markdown(
+                f'<div class="script-en-title">{html.escape(topic["title_en"])}</div>',
+                unsafe_allow_html=True,
+            )
+        if topic.get("summary_en") and lang != "ไทย":
+            st.caption(topic["summary_en"])
+        if has_script(script_en):
+            render_script_sections(script_en, english=True)
+        else:
+            st.info("ยังไม่มีสคริปต์ภาษาอังกฤษของเรื่องนี้ — กดค้นหาเรื่องใหม่เพื่อให้ AI สร้างคู่ไทย/อังกฤษ")
+    copy_script_button(
+        script_copy_text(
+            topic.get("title", ""),
+            script_th,
+            topic.get("title_en", ""),
+            script_en,
+            lang,
+        ),
+        f"copy-{widget_key}",
+    )
+    return script_th, script_en, lang
 
 
 def store_broll(audio_key, broll, topic=None):
@@ -645,8 +590,7 @@ def render_card(topic, tone="yellow"):
         """,
         unsafe_allow_html=True,
     )
-    render_script_sections(topic["script"])
-    copy_script_button(script_copy_text(topic["title"], topic["script"]), f"copy-{topic['id']}")
+    render_topic_scripts(topic, topic["id"])
     render_tts_controls(topic["id"], topic["title"], topic["script"])
     render_broll_finder(topic["id"], topic["title"], topic["script"], topic.get("broll"), topic)
     keep_col, drop_col = st.columns(2)
@@ -721,7 +665,7 @@ with tab1:
     with col_a:
         api_key, model_name, voice_id, eleven_key, eleven_voice = render_settings_panel()
     with col_b:
-        st.info("กดค้นหาเรื่องใหม่ เพื่อได้สคริปต์ Hook / Context / Twist / Reveal สำหรับคลิปสั้น แล้วลองฟังเสียงพากย์ได้ในหน้านี้")
+        st.info("กดค้นหาเรื่องใหม่ เพื่อได้สคริปต์ไทยและอังกฤษ (Hook / Context / Twist / Reveal) สำหรับคลิปสั้น แล้วลองฟังเสียงพากย์ได้ในหน้านี้")
         if not api_key:
             st.warning("ใส่ Gemini API Key ก่อนเริ่มค้นหาเรื่อง")
         elif st.button("🔍 ค้นหาเรื่องใหม่ (5 เรื่อง)", type="primary"):
@@ -737,17 +681,25 @@ with tab1:
 ตอบกลับเป็น JSON Array เท่านั้น ห้ามมี markdown หรือคำอธิบายอื่น
 แต่ละเรื่องเป็น object ตามนี้:
 - title: ชื่อเรื่องภาษาไทยที่ดึงดูด
-- summary: สรุปสั้นๆ ว่าเรื่องเกี่ยวกับอะไร และทำไมถึงน่าสนใจ
-- script: object มี 4 คีย์
+- title_en: ชื่อเรื่องภาษาอังกฤษที่ดึงดูด ความหมายเดียวกับ title
+- summary: สรุปสั้นๆ ภาษาไทย ว่าเรื่องเกี่ยวกับอะไร และทำไมถึงน่าสนใจ
+- summary_en: สรุปภาษาอังกฤษ ความหมายเดียวกับ summary
+- script: object มี 4 คีย์ เขียนเป็นภาษาไทยเท่านั้น
   - hook: ฮุค (ประโยคทำให้สงสัย)
   - context: บริบท (3-4 ประโยคปูเรื่อง/ความเชื่อเดิม)
   - twist: แต่ (ประโยคพลิกสถานการณ์)
   - reveal: เฉลย (ประโยคอธิบายความจริงที่ต่างออกไป)
+- script_en: object มี 4 คีย์ hook, context, twist, reveal เขียนเป็นภาษาอังกฤษเท่านั้น
+  เป็นสคริปต์พากย์อังกฤษที่พูดได้จริง ไม่ใช่คำแปลคำต่อคำ
+  โทนลึกลับ กระชับ ฟังเป็นคลิปสั้น
 - video_keywords: object มี 4 คีย์ hook, context, twist, reveal
   แต่ละคีย์เป็น array ของคีย์เวิร์ดภาษาอังกฤษ 2-3 ชุด สำหรับค้นหาคลิป B-roll ใน YouTube / Pexels / Pixabay
   ใช้วลีสั้นที่หาภาพเจอง่าย เช่น dark hallway night, candle flickering, old photograph close up
 
-สคริปต์รวมทุกส่วนแล้วพูดจบใน 30-60 วินาที ใช้ภาษาไทยที่เป็นธรรมชาติ
+สคริปต์ไทยและอังกฤษรวมทุกส่วนแล้วพูดจบใน 30-60 วินาที
+script ต้องเป็นภาษาไทยที่เป็นธรรมชาติ
+script_en ต้องเป็นภาษาอังกฤษที่เป็นธรรมชาติ ห้ามเว้นว่าง
+ห้ามสลับภาษา: อย่าใส่ประโยคอังกฤษใน script และอย่าใส่ประโยคไทยใน script_en
 """
                     response = client.models.generate_content(
                         model=model_name,
@@ -814,11 +766,9 @@ with tab3:
             script = normalize_script(topic.get("script"))
             with st.expander(topic.get("title", "ไม่มีชื่อ")):
                 st.write(topic.get("summary", ""))
-                render_script_sections(script)
-                copy_script_button(
-                    script_copy_text(topic.get("title", ""), script),
-                    f"copy-saved-{real_index}",
-                )
+                if topic.get("summary_en"):
+                    st.caption(topic.get("summary_en"))
+                render_topic_scripts(topic, f"saved-{real_index}")
                 render_tts_controls(f"saved-{real_index}", topic.get("title", "script"), script)
                 render_broll_finder(
                     f"saved-{real_index}",
