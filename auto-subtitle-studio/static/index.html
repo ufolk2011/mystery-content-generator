@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Auto Subtitle Studio</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <p class="kicker">Auto Subtitle Studio</p>
+        <h1>ถอดเสียงเป็นซับ `.srt` แบบคำต่อคำ</h1>
+        <p class="lede">
+          อัปโหลดไฟล์เสียง แล้วได้ซับพร้อมเวลาเริ่ม-จบ สำหรับทำ Kinetic Subtitle
+          ไม่ต้องวางคีย์ในหน้าเว็บ
+        </p>
+      </header>
+
+      <section class="panel">
+        <div class="dropzone" id="dropzone">
+          <input
+            id="file-input"
+            type="file"
+            accept=".mp3,.wav,.m4a,.aac,.ogg,.flac,.webm,audio/*"
+          />
+          <strong>ลากไฟล์เสียงมาวางที่นี่</strong>
+          <span>หรือกดเพื่อเลือกไฟล์ MP3, WAV, M4A, AAC, OGG, FLAC, WebM</span>
+          <p class="file-name" id="file-name">ยังไม่ได้เลือกไฟล์</p>
+        </div>
+
+        <div class="controls">
+          <label>
+            จำนวนคำต่อหนึ่งบรรทัด
+            <select id="words-per-line">
+              <option value="1">1 คำ — ละเอียดสุด</option>
+              <option value="2" selected>2 คำ</option>
+              <option value="3">3 คำ</option>
+              <option value="4">4 คำ — อ่านคล่อง</option>
+            </select>
+          </label>
+          <button type="button" id="transcribe-btn">ถอดเสียงเป็นซับ</button>
+        </div>
+        <p class="status" id="status">คีย์ Gemini เก็บในไฟล์ .env เท่านั้น จะไม่โชว์บนหน้านี้</p>
+      </section>
+
+      <section class="grid">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>ตารางแก้ไขซับ</h2>
+            <button type="button" class="ghost" id="regroup-btn">จัดกลุ่มใหม่ตามจำนวนคำ</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>เวลาเริ่ม</th>
+                  <th>เวลาจบ</th>
+                  <th>ข้อความ</th>
+                </tr>
+              </thead>
+              <tbody id="cue-body">
+                <tr>
+                  <td colspan="4" class="empty">ยังไม่มีซับ อัปโหลดไฟล์แล้วกดถอดเสียง</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>ตัวอย่างไฟล์ .srt</h2>
+            <button type="button" id="download-btn">ดาวน์โหลด subtitles.srt</button>
+          </div>
+          <pre id="srt-preview">ยังไม่มีตัวอย่าง</pre>
+        </div>
+      </section>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
