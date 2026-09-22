@@ -10,6 +10,7 @@ from google.genai import types
 import streamlit as st
 import streamlit.components.v1 as components
 
+from gemini_models import DEFAULT_GEMINI_MODEL, GEMINI_MODELS, resolve_gemini_model
 from tts import safe_filename, spoken_script, synthesize
 from lip_sync import render_lip_sync_page
 
@@ -248,11 +249,16 @@ def render_settings_panel():
     if api_key_value:
         st.session_state.api_key = api_key_value
 
-    model_value = st.selectbox(
-        "โมเดล",
-        ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"],
-        index=0,
-        key="model_name_v2",
+    if "model_name_v3" not in st.session_state:
+        previous = st.session_state.get("model_name_v2") or DEFAULT_GEMINI_MODEL
+        st.session_state.model_name_v3 = resolve_gemini_model(previous)
+    model_value = resolve_gemini_model(
+        st.selectbox(
+            "โมเดล",
+            GEMINI_MODELS,
+            index=GEMINI_MODELS.index(DEFAULT_GEMINI_MODEL),
+            key="model_name_v3",
+        )
     )
     voice_labels = {
         "male_dark": "ผู้ชายโทนดาร์ก / ลึกลับ",
@@ -402,16 +408,20 @@ def broll_prompt(title, script):
 """
 
 
-def generate_broll_keywords(client, title, script):
+def generate_json(client, model, prompt):
     response = client.models.generate_content(
-        model=model_name,
-        contents=broll_prompt(title, script),
+        model=resolve_gemini_model(model),
+        contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
             thinking_config=types.ThinkingConfig(thinking_level="low"),
         ),
     )
-    return normalize_keywords(extract_json(response.text))
+    return extract_json(response.text)
+
+
+def generate_broll_keywords(client, model, title, script):
+    return normalize_keywords(generate_json(client, model, broll_prompt(title, script)))
 
 
 def has_broll(broll):
@@ -579,7 +589,7 @@ def render_broll_finder(audio_key, title, script, existing=None, topic=None):
             try:
                 with st.spinner("กำลังหาคีย์เวิร์ดคลิปประกอบแต่ละท่อน..."):
                     client = genai.Client(api_key=api_key)
-                    broll = generate_broll_keywords(client, title, script)
+                    broll = generate_broll_keywords(client, model_name, title, script)
             except Exception as err:
                 st.error(f"หาคลิปไม่สำเร็จ: {err}")
                 return
@@ -749,15 +759,7 @@ with tab1:
 
 สคริปต์รวมทุกส่วนแล้วพูดจบใน 30-60 วินาที ใช้ภาษาไทยที่เป็นธรรมชาติ
 """
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            thinking_config=types.ThinkingConfig(thinking_level="low"),
-                        ),
-                    )
-                    topics = normalize_topics(extract_json(response.text))
+                    topics = normalize_topics(generate_json(client, model_name, prompt))
                     if len(topics) < 5:
                         raise ValueError(f"ได้มา {len(topics)} เรื่อง ต้องการ 5 เรื่อง")
                     st.session_state.results = topics
