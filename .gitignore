@@ -7,3 +7,4 @@ saved_stories.json
 output/
 lelo/node_modules/
 lelo/dist/
+lelo/tsconfig.tsbuildinfo
