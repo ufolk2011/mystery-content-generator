@@ -127,3 +127,42 @@ function sampleSeries(symbol: string): QuoteSeries {
     source: "sample",
   };
 }
+
+export interface TickQuote {
+  price: number;
+  changePercent: number;
+}
+
+export async function loadQuotes(symbols: string[]): Promise<Record<string, TickQuote>> {
+  const pairs = await Promise.all(
+    symbols.map(async (symbol) => {
+      try {
+        const response = await fetch(`/api/yahoo/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=5d`);
+        if (!response.ok) return [symbol, { price: 0, changePercent: 0 }] as const;
+        const payload = (await response.json()) as YahooChart;
+        const closes = payload.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter((value): value is number => value != null) ?? [];
+        const price = closes[closes.length - 1] ?? 0;
+        const previous = closes[closes.length - 2] ?? price;
+        return [symbol, { price, changePercent: previous ? ((price - previous) / previous) * 100 : 0 }] as const;
+      } catch {
+        return [symbol, { price: 0, changePercent: 0 }] as const;
+      }
+    }),
+  );
+  return Object.fromEntries(pairs);
+}
+
+export interface NewsItem {
+  title: string;
+  link: string;
+  publisher: string;
+}
+
+export async function loadNews(symbol: string): Promise<NewsItem[]> {
+  const response = await fetch(`/api/yahoo/v1/finance/search?q=${encodeURIComponent(symbol)}&newsCount=8&quotesCount=0`);
+  if (!response.ok) return [];
+  const payload = (await response.json()) as { news?: { title?: string; link?: string; publisher?: string }[] };
+  return (payload.news ?? [])
+    .filter((item) => item.title && item.link)
+    .map((item) => ({ title: item.title as string, link: item.link as string, publisher: item.publisher || "Yahoo Finance" }));
+}

@@ -1,5 +1,6 @@
 import type { IChartApi, ISeriesApi, UTCTimestamp } from "lightweight-charts";
 import type { Analysis, Candle } from "../types";
+import { drawDrawings, type Drawing } from "./drawings";
 
 export interface OverlayFlags {
   support: boolean;
@@ -36,6 +37,7 @@ export function drawOverlay(
   candles: Candle[],
   analysis: Analysis,
   flags: OverlayFlags,
+  drawings: Drawing[] = [],
 ) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -96,6 +98,7 @@ export function drawOverlay(
   for (const node of flags.poc ? analysis.profile.lvn : []) {
     paintBand(ctx, node.priceHigh, node.priceLow, 0, paneWidth, "rgba(148,163,184,0.08)", yOf);
   }
+  drawDrawings(ctx, drawings, xOf, yOf, paneWidth);
   ctx.clearRect(paneWidth, 0, width - paneWidth, height);
   ctx.clearRect(0, paneHeight, width, height - paneHeight);
 }
