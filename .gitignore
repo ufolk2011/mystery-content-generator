@@ -5,3 +5,5 @@ __pycache__/
 history_topics.json
 saved_stories.json
 output/
+lelo/node_modules/
+lelo/dist/
